@@ -1,0 +1,9 @@
+# The secret must never be baked into an image. It arrives at run time.
+.env
+
+node_modules
+npm-debug.log*
+Dockerfile
+.dockerignore
+compose.yaml
+README.md

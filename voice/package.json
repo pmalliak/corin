@@ -1,0 +1,25 @@
+{
+  "name": "corin-voice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The Discord voice host for Corin. Runs outside the Worker, because Discord voice needs UDP.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "check": "node --env-file-if-exists=.env src/check.ts",
+    "start": "node --env-file-if-exists=.env src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.1",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@discordjs/voice": "^0.19.2",
+    "@noble/ciphers": "^2.4.0",
+    "discord.js": "^14.27.0",
+    "opusscript": "^0.0.8"
+  }
+}

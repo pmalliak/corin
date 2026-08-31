@@ -1,0 +1,15 @@
+# What actually runs on the server. `docker compose up -d --build` and nothing else.
+services:
+  voice:
+    build: .
+    image: corin-voice
+    # Read at run time from voice/.env, never copied into the image.
+    env_file: .env
+    restart: unless-stopped
+    # So SIGTERM reaches Node and the coach leaves the channel cleanly on deploy.
+    init: true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
