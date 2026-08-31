@@ -36,3 +36,21 @@ export function discordUserId(interaction: { member?: { user?: { id?: string } }
 }
 
 export type DiscordEnv = Pick<Env, "DISCORD_PUBLIC_KEY">;
+
+export function deferredInteractionResponse(): Response {
+  return Response.json({ type: 5, data: { flags: 64 } });
+}
+
+export interface DeferredInteraction {
+  applicationId: string;
+  token: string;
+}
+
+export async function editOriginalInteractionResponse(interaction: DeferredInteraction, content: string): Promise<void> {
+  const response = await fetch(`https://discord.com/api/v10/webhooks/${interaction.applicationId}/${interaction.token}/messages/@original`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+  if (!response.ok) console.error("Discord follow-up failed", response.status, await response.text());
+}

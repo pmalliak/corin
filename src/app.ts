@@ -1,27 +1,40 @@
-import { DiscordInteractionType, discordUserId, interactionResponse, verifyDiscordRequest } from "./discord";
+import {
+  DiscordInteractionType,
+  deferredInteractionResponse,
+  discordUserId,
+  editOriginalInteractionResponse,
+  interactionResponse,
+  verifyDiscordRequest,
+  type DeferredInteraction,
+} from "./discord";
 import { D1CoachRepository } from "./repositories";
-import type { DeviceAuthenticationRepository, DeviceStatusRepository, Env, PairingCodeRepository } from "./types";
+import type { DeviceAuthenticationRepository, DeviceStatus, DeviceStatusRepository, Env, PairingCodeRepository } from "./types";
 
 interface Dependencies {
   pairingCodes: PairingCodeRepository;
   deviceStatus: DeviceStatusRepository;
   deviceAuthentication: DeviceAuthenticationRepository;
+  followUp(interaction: DeferredInteraction, content: string): Promise<void>;
   now(): Date;
 }
 
+type Waiter = Pick<ExecutionContext, "waitUntil">;
+
 interface DiscordInteraction {
   type: number;
+  application_id?: string;
+  token?: string;
   data?: { name?: string; options?: Array<{ name?: string }> };
   member?: { user?: { id?: string } };
   user?: { id?: string };
 }
 
-export function createApp(env: Env, dependencies: Dependencies = defaultDependencies(env)) {
+export function createApp(env: Env, ctx: Waiter, dependencies: Dependencies = defaultDependencies(env)) {
   return {
     fetch: async (request: Request): Promise<Response> => {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health") return new Response("ok");
-      if (request.method === "POST" && url.pathname === "/interactions") return handleInteraction(request, env, dependencies);
+      if (request.method === "POST" && url.pathname === "/interactions") return handleInteraction(request, env, ctx, dependencies);
       if (request.method === "POST" && url.pathname === "/agent/pair") return handlePairingExchange(request, dependencies);
       if (request.method === "GET" && url.pathname === "/agent/session") return handleDeviceSession(request, env, dependencies);
       return new Response("Not Found", { status: 404 });
@@ -31,10 +44,16 @@ export function createApp(env: Env, dependencies: Dependencies = defaultDependen
 
 function defaultDependencies(env: Env): Dependencies {
   const repository = new D1CoachRepository(env.COACH_DB);
-  return { pairingCodes: repository, deviceStatus: new DurableDeviceStatusRepository(repository, env), deviceAuthentication: repository, now: () => new Date() };
+  return {
+    pairingCodes: repository,
+    deviceStatus: new DurableDeviceStatusRepository(repository, env),
+    deviceAuthentication: repository,
+    followUp: editOriginalInteractionResponse,
+    now: () => new Date(),
+  };
 }
 
-async function handleInteraction(request: Request, env: Env, dependencies: Dependencies): Promise<Response> {
+async function handleInteraction(request: Request, env: Env, ctx: Waiter, dependencies: Dependencies): Promise<Response> {
   const body = await verifyDiscordRequest(request, env.DISCORD_PUBLIC_KEY);
   if (!body) return new Response("Unauthorized", { status: 401 });
 
@@ -48,15 +67,41 @@ async function handleInteraction(request: Request, env: Env, dependencies: Depen
   if (!userId) return interactionResponse("I couldn't identify your Discord account.");
 
   const subcommand = interaction.data.options?.[0]?.name;
-  if (subcommand === "connect") {
-    const pairing = await dependencies.pairingCodes.create(userId, dependencies.now());
-    return interactionResponse(`Enter this pairing code in the LoL Coach Agent: \`${pairing.value}\`\nIt expires at <t:${Math.floor(pairing.expiresAt.getTime() / 1_000)}:R>.`);
+  if (subcommand !== "connect" && subcommand !== "status") return interactionResponse("Try `/coach connect` or `/coach status`.");
+
+  const deferred = deferralTarget(interaction);
+  if (!deferred) return interactionResponse("I couldn't reply to that interaction.");
+
+  // Discord abandons an interaction after three seconds, which D1 and the session
+  // Durable Object can exceed together, so acknowledge first and edit the reply after.
+  ctx.waitUntil(completeCoachCommand(subcommand, userId, deferred, dependencies));
+  return deferredInteractionResponse();
+}
+
+async function completeCoachCommand(subcommand: "connect" | "status", userId: string, deferred: DeferredInteraction, dependencies: Dependencies): Promise<void> {
+  let content: string;
+  try {
+    content = subcommand === "connect" ? await connectContent(userId, dependencies) : await statusContent(userId, dependencies);
+  } catch (error) {
+    console.error(`/coach ${subcommand} failed`, error);
+    content = "Something went wrong on my side. Try again in a moment.";
   }
-  if (subcommand === "status") {
-    const status = await dependencies.deviceStatus.getForDiscordUser(userId, dependencies.now());
-    return interactionResponse(`Agent: ${status.agent}\nLeague: ${status.league}\nLive API: ${status.liveApi}\nCurrent game: ${status.currentGame}`);
-  }
-  return interactionResponse("Try `/coach connect` or `/coach status`.");
+  await dependencies.followUp(deferred, content);
+}
+
+async function connectContent(userId: string, dependencies: Dependencies): Promise<string> {
+  const pairing = await dependencies.pairingCodes.create(userId, dependencies.now());
+  return `Enter this pairing code in the LoL Coach Agent: \`${pairing.value}\`\nIt expires at <t:${Math.floor(pairing.expiresAt.getTime() / 1_000)}:R>.`;
+}
+
+async function statusContent(userId: string, dependencies: Dependencies): Promise<string> {
+  const status = await dependencies.deviceStatus.getForDiscordUser(userId, dependencies.now());
+  return `Agent: ${status.agent}\nLeague: ${status.league}\nLive API: ${status.liveApi}\nCurrent game: ${status.currentGame}`;
+}
+
+function deferralTarget(interaction: DiscordInteraction): DeferredInteraction | null {
+  if (!interaction.application_id || !interaction.token) return null;
+  return { applicationId: interaction.application_id, token: interaction.token };
 }
 
 async function handlePairingExchange(request: Request, dependencies: Dependencies): Promise<Response> {
@@ -78,17 +123,23 @@ async function handleDeviceSession(request: Request, env: Env, dependencies: Dep
   return env.DEVICE_SESSIONS.getByName(device.deviceId).fetch(upstream);
 }
 
+const unpairedStatus: DeviceStatus = { agent: "Not paired", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" };
+const disconnectedStatus: DeviceStatus = { agent: "Disconnected", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" };
+
 class DurableDeviceStatusRepository implements DeviceStatusRepository {
   public constructor(private readonly repository: D1CoachRepository, private readonly env: Env) {}
 
-  public async getForDiscordUser(discordUserId: string, now: Date) {
-    const fallback = await this.repository.getForDiscordUser(discordUserId, now);
-    if (fallback.agent === "Not paired") return fallback;
+  public async getForDiscordUser(discordUserId: string, _now: Date): Promise<DeviceStatus> {
     const deviceId = await this.repository.getLatestDeviceIdForDiscordUser(discordUserId);
-    if (!deviceId) return fallback;
-    const response = await this.env.DEVICE_SESSIONS.getByName(deviceId).fetch("https://device-session/status", { headers: { "x-coach-internal-status": "1" } });
-    const status = await response.json();
-    return isDeviceStatus(status) ? status : fallback;
+    if (!deviceId) return unpairedStatus;
+    try {
+      const response = await this.env.DEVICE_SESSIONS.getByName(deviceId).fetch("https://device-session/status", { headers: { "x-coach-internal-status": "1" } });
+      const status = await response.json();
+      return isDeviceStatus(status) ? status : disconnectedStatus;
+    } catch (error) {
+      console.error("Device session status lookup failed", error);
+      return disconnectedStatus;
+    }
   }
 }
 
@@ -141,7 +192,7 @@ function sessionHeaders(headers: Headers, deviceId: string): Headers {
   return upstream;
 }
 
-function isDeviceStatus(value: unknown): value is import("./types").DeviceStatus {
+function isDeviceStatus(value: unknown): value is DeviceStatus {
   if (typeof value !== "object" || value === null) return false;
   const status = value as Record<string, unknown>;
   return (status.agent === "Connected" || status.agent === "Disconnected" || status.agent === "Not paired")

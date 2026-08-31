@@ -1,9 +1,9 @@
 import { newOpaqueSecret, sha256 } from "./crypto";
-import type { DeviceAuthenticationRepository, DeviceStatus, DeviceStatusRepository, Env, PairingCode, PairingCodeRepository } from "./types";
+import type { DeviceAuthenticationRepository, Env, PairingCode, PairingCodeRepository } from "./types";
 
 const pairingLifetimeMs = 10 * 60 * 1_000;
 
-export class D1CoachRepository implements PairingCodeRepository, DeviceStatusRepository, DeviceAuthenticationRepository {
+export class D1CoachRepository implements PairingCodeRepository, DeviceAuthenticationRepository {
   public constructor(private readonly db: Env["COACH_DB"]) {}
 
   public async create(discordUserId: string, now: Date): Promise<PairingCode> {
@@ -52,21 +52,6 @@ export class D1CoachRepository implements PairingCodeRepository, DeviceStatusRep
       .run();
 
     return { deviceId, credential };
-  }
-
-  public async getForDiscordUser(discordUserId: string, _now: Date): Promise<DeviceStatus> {
-    const device = await this.db
-      .prepare(
-        "SELECT id FROM devices INNER JOIN users ON users.id = devices.user_id WHERE users.discord_user_id = ? AND devices.revoked_at IS NULL ORDER BY devices.last_seen_at DESC, devices.created_at DESC LIMIT 1",
-      )
-      .bind(discordUserId)
-      .first<{ id: string }>();
-
-    if (!device) {
-      return { agent: "Not paired", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" };
-    }
-
-    return { agent: "Disconnected", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" };
   }
 
   public async getLatestDeviceIdForDiscordUser(discordUserId: string): Promise<string | null> {

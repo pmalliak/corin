@@ -12,7 +12,7 @@ npm run typecheck
 npm test
 ```
 
-## Provisioning checklist (not performed yet)
+## Provisioning checklist (completed)
 
 1. Create a Discord application and Bot; copy its Application ID, Bot Token, and Public Key.
 2. Create a development Discord server (guild) and copy its Guild ID.
@@ -25,10 +25,11 @@ npm test
 
    ```sh
    DISCORD_APPLICATION_ID=... DISCORD_BOT_TOKEN=... DISCORD_GUILD_ID=... npm run discord:register
+   # PowerShell: $env:DISCORD_APPLICATION_ID="..."; $env:DISCORD_BOT_TOKEN="..."; $env:DISCORD_GUILD_ID="..."; npm run discord:register
    ```
 
-The Worker endpoint validates Discord's Ed25519 signature before handling any interaction.
+The Worker endpoint validates Discord's Ed25519 signature before handling any interaction. Both subcommands reply with a deferred ephemeral response and edit it once the work finishes, because Discord drops any interaction left unanswered for three seconds.
 
-## Agent protocol (in progress)
+## Agent protocol (live)
 
-`POST /agent/pair` exchanges a valid pairing code for a device credential. The agent then opens `GET /agent/session` as an outbound WebSocket with `Authorization: Bearer <credential>` and sends the versioned `hello`/`heartbeat` messages defined in [`docs/contracts/`](docs/contracts/). The local Rust fixture agent is the next unfinished component.
+`POST /agent/pair` exchanges a valid pairing code for a device credential. The agent then opens `GET /agent/session` as an outbound WebSocket with `Authorization: Bearer <credential>` and sends the versioned `hello`/`heartbeat` messages defined in [`docs/contracts/`](docs/contracts/). The endpoints are deployed and exercised end to end. The local Rust fixture agent is the next unfinished component.
