@@ -1,0 +1,31 @@
+[package]
+name = "corin-agent"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.79"
+description = "Local LoL Coach Agent. Pairs with the Corin backend and reports League status over an outbound WebSocket."
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+gethostname = "0.5"
+# Only the platform-native backends. The Linux secret-service backend needs an
+# extra crypto feature and this agent targets Windows first.
+keyring = { version = "3", features = ["windows-native", "apple-native"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

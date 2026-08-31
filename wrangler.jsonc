@@ -21,5 +21,11 @@
   "durable_objects": {
     "bindings": [{ "name": "DEVICE_SESSIONS", "class_name": "DeviceSession" }]
   },
+  "r2_buckets": [
+    {
+      "binding": "RELEASES",
+      "bucket_name": "corin-releases"
+    }
+  ],
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DeviceSession"] }]
 }
