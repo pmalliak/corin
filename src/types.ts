@@ -1,5 +1,4 @@
-export interface Env {
-  COACH_DB: D1Database;
+export interface Env extends Cloudflare.Env {
   DISCORD_PUBLIC_KEY: string;
 }
 

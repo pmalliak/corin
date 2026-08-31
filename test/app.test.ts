@@ -7,9 +7,9 @@ let privateKey: CryptoKey;
 let publicKeyHex: string;
 
 beforeAll(async () => {
-  const keyPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const keyPair = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as CryptoKeyPair;
   privateKey = keyPair.privateKey;
-  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", keyPair.publicKey));
+  const raw = new Uint8Array((await crypto.subtle.exportKey("raw", keyPair.publicKey)) as ArrayBuffer);
   publicKeyHex = [...raw].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 });
 

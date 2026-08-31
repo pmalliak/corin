@@ -3,14 +3,18 @@
   "name": "lol-ai-voice-coach",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-31",
+  "compatibility_flags": ["nodejs_compat"],
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "logs": {
+      "head_sampling_rate": 1
+    }
   },
   "d1_databases": [
     {
       "binding": "COACH_DB",
       "database_name": "lol-ai-voice-coach",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "b47c2c5a-e62a-45da-b6f0-ea78d9a25306",
       "migrations_dir": "migrations"
     }
   ]

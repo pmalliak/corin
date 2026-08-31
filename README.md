@@ -17,7 +17,7 @@ npm test
 1. Create a Discord application and Bot; copy its Application ID, Bot Token, and Public Key.
 2. Create a development Discord server (guild) and copy its Guild ID.
 3. Authenticate Wrangler to the intended Cloudflare account.
-4. Create the D1 database named `lol-ai-voice-coach` and replace `REPLACE_WITH_D1_DATABASE_ID` in [`wrangler.jsonc`](wrangler.jsonc). Commit that database ID; it is an identifier, not a secret.
+4. The production D1 database is bound in [`wrangler.jsonc`](wrangler.jsonc). Its ID is an identifier, not a secret.
 5. Add `DISCORD_PUBLIC_KEY` as a Cloudflare Worker secret. Do not commit it, the bot token, pairing codes, or device credentials.
 6. In Cloudflare Workers & Pages, import this GitHub repository and enable Workers Builds for the production branch. Set its deploy command to `npm run deploy`; it applies any unapplied D1 migrations before deploying the Worker.
 7. Set Discord's Interactions Endpoint URL to `https://<worker-domain>/interactions`.

@@ -17,7 +17,7 @@ export async function verifyDiscordRequest(request: Request, publicKeyHex: strin
   const body = await request.text();
   const publicKey = hexToBytes(publicKeyHex).buffer as ArrayBuffer;
   const signature = hexToBytes(signatureHex).buffer as ArrayBuffer;
-  const algorithm: AlgorithmIdentifier = { name: "Ed25519" };
+  const algorithm = { name: "Ed25519" } as const;
   const importedKey = await crypto.subtle.importKey("raw", publicKey, algorithm, false, ["verify"]);
   const isValid = await crypto.subtle.verify(algorithm, importedKey, signature, encoder.encode(timestamp + body));
   return isValid ? body : null;
