@@ -1,0 +1,20 @@
+{
+  "name": "lol-ai-voice-coach",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "npm run typecheck && wrangler d1 migrations apply COACH_DB --remote && wrangler deploy",
+    "discord:register": "node scripts/register-commands.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260831.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.127.1"
+  }
+}

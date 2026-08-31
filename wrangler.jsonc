@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lol-ai-voice-coach",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-31",
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "COACH_DB",
+      "database_name": "lol-ai-voice-coach",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
