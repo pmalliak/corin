@@ -83,3 +83,24 @@ Heartbeats go out every 20 seconds and the backend treats a device as connected
 for 75 seconds after the last one, so two lost beats are survivable. Reconnects
 back off from 2 up to 60 seconds with jitter, and a session that stays up for a
 minute resets that budget.
+
+## Starting with Windows
+
+```sh
+corin-agent autostart on     # from now on, start at login
+corin-agent autostart off    # stop
+corin-agent autostart show   # which of the two
+```
+
+Pairing offers this once, since a coach that only runs when you remember to
+start it is a coach you stop using. `corin-agent reset` removes the entry along
+with the credential.
+
+It is a per-user `Run` key, so no administrator rights, nothing installed, and
+nothing left behind but one registry value pointing at wherever the binary sits.
+
+The entry passes `--background`, which hides the console window rather than
+freeing it. Freeing it would invalidate stdout, and Rust panics when a print
+fails, so the agent would die on its first line: a failure that only ever happens
+at login, where nobody is watching. The window still flashes for an instant; a
+tray build is what removes that for good.

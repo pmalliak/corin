@@ -76,6 +76,12 @@ Only the three status flags leave the machine. The real payload is roughly 60 KB
 carrying player identity, items, runes and an event log, and the struct the agent
 deserializes has one field.
 
+`corin-agent autostart on` writes a per-user `Run` key, offered once at pairing
+and removed by `reset`. That entry passes `--background`, which hides the console
+window rather than freeing it: freeing invalidates stdout, and Rust panics when a
+print fails, so the agent died on its first line. That only ever happened at
+login, which is exactly where nobody is watching.
+
 The release build is a single 2.3 MB executable. It is published to the
 `corin-releases` R2 bucket and served by the Worker at `GET /download`, verified
 by matching SHA-256 against the local build.
@@ -89,7 +95,7 @@ npm test
 cd agent && cargo test
 ```
 
-All pass at this handoff point: 14 Worker tests, 20 agent tests.
+All pass at this handoff point: 13 Worker tests, 27 agent tests, and `cargo clippy` is clean.
 
 ## The first slice is complete
 
@@ -107,5 +113,6 @@ Discord, which is listed below.
 - There is no way to revoke a device from Discord. The `devices.revoked_at`
   column exists and is honoured on every lookup, but only a manual D1 update
   sets it. `/coach devices` and `/coach disconnect` are the natural home for it.
-- Nothing starts the agent with Windows yet, so a player has to run it each time.
+- A tray build, so the agent stops being a console window. Autostart hides it,
+  but it still flashes at login and can be closed by accident.
 - Voice, OpenAI and push to talk remain out of scope until this slice is boring.

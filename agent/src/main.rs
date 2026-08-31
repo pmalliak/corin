@@ -1,6 +1,7 @@
 //! Corin agent. Pairs this machine to a Discord account once, then keeps an
 //! outbound session open so `/coach status` can report real League state.
 
+mod autostart;
 mod config;
 mod contract;
 mod credential;
@@ -42,10 +43,21 @@ async fn run() -> Result<()> {
         .build()
         .context("could not build the HTTP client")?;
 
-    match Command::parse(std::env::args().skip(1))? {
+    // The Run key passes --background, which is a mode rather than a command, so it
+    // is handled and then dropped before anything tries to read it as one.
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.iter().any(|argument| argument == autostart::BACKGROUND_FLAG) {
+        autostart::release_console();
+    }
+    let arguments = arguments.into_iter().filter(|argument| argument != autostart::BACKGROUND_FLAG);
+
+    match Command::parse(arguments)? {
+        Command::Autostart(action) => run_autostart(action),
         Command::Reset => {
             store.clear()?;
-            println!("Device credential removed. Run /coach connect in Discord to pair again.");
+            autostart::disable()?;
+            println!("Device credential removed, and this machine no longer starts the agent on login.");
+            println!("Run /coach connect in Discord to pair again.");
             Ok(())
         }
         Command::Status => {
@@ -53,6 +65,7 @@ async fn run() -> Result<()> {
                 Some(_) => println!("Paired. Backend: {}", config.base_url),
                 None => println!("Not paired. Run /coach connect in Discord, then run this agent with the code."),
             }
+            println!("Starts with Windows: {}", if autostart::is_enabled() { "yes" } else { "no" });
             Ok(())
         }
         Command::Pair(code) => {
@@ -77,6 +90,50 @@ async fn pair(client: &reqwest::Client, config: &Config, store: &dyn CredentialS
     store.save(&response.credential)?;
     println!("Paired as \"{}\". This machine will reconnect on its own from now on.", config.device_name);
     tracing::info!(device_id = %response.device_id, "paired");
+    offer_autostart();
+    Ok(())
+}
+
+/// Asked once, right after pairing, because a coach that only runs when you
+/// remember to start it is a coach you stop using. Declining is one keystroke and
+/// `corin-agent autostart on` is always there later.
+fn offer_autostart() {
+    if !std::io::stdin().is_terminal() || autostart::is_enabled() {
+        return;
+    }
+
+    print!("Start Corin automatically when Windows starts? [Y/n] ");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return;
+    }
+
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "" | "y" | "yes") {
+        match autostart::enable() {
+            Ok(_) => println!("Done. Corin will be running next time you log in."),
+            Err(error) => eprintln!("Could not set that up: {error:#}"),
+        }
+    } else {
+        println!("Fine. Run `corin-agent autostart on` whenever you change your mind.");
+    }
+}
+
+fn run_autostart(action: AutostartAction) -> Result<()> {
+    match action {
+        AutostartAction::On => {
+            let command = autostart::enable()?;
+            println!("Corin will start with Windows:\n  {command}");
+        }
+        AutostartAction::Off => {
+            autostart::disable()?;
+            println!("Corin will no longer start with Windows.");
+        }
+        AutostartAction::Show => match autostart::current()? {
+            Some(command) => println!("Starts with Windows:\n  {command}"),
+            None => println!("Does not start with Windows. Run `corin-agent autostart on` to change that."),
+        },
+    }
     Ok(())
 }
 
@@ -114,6 +171,13 @@ enum Command {
     Pair(String),
     Reset,
     Status,
+    Autostart(AutostartAction),
+}
+
+enum AutostartAction {
+    On,
+    Off,
+    Show,
 }
 
 impl Command {
@@ -125,6 +189,12 @@ impl Command {
         match first.as_str() {
             "reset" | "--reset" => Ok(Self::Reset),
             "status" | "--status" => Ok(Self::Status),
+            "autostart" | "--autostart" => match args.next().as_deref() {
+                None | Some("show") | Some("status") => Ok(Self::Autostart(AutostartAction::Show)),
+                Some("on") | Some("enable") => Ok(Self::Autostart(AutostartAction::On)),
+                Some("off") | Some("disable") => Ok(Self::Autostart(AutostartAction::Off)),
+                Some(other) => anyhow::bail!("autostart takes on, off, or show, not {other:?}"),
+            },
             "pair" | "--pair" => {
                 let code = args.next().context("pair needs a code, for example: corin-agent pair 9C5510BD61EC")?;
                 Ok(Self::Pair(config::normalize_pairing_code(&code)?))
@@ -147,7 +217,9 @@ Corin agent
   corin-agent <CODE>          pair with a code from /coach connect
   corin-agent pair <CODE>     the same thing, spelled out
   corin-agent status          say whether this machine is paired
-  corin-agent reset           forget the device credential
+  corin-agent autostart on    start with Windows from now on
+  corin-agent autostart off   stop doing that
+  corin-agent reset           forget the credential and the startup entry
   corin-agent help            this text
 
 Environment:

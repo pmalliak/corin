@@ -25,6 +25,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 
+[target.'cfg(windows)'.dependencies]
+# Autostart is a per-user Run key, which needs no administrator rights.
+winreg = "0.52"
+# Only to drop the console window when started by that Run key.
+windows = { version = "0.57", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
+
 [profile.release]
 opt-level = "z"
 lto = true
