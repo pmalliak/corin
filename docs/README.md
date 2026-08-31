@@ -9,6 +9,7 @@ This directory records the decisions and implementation context derived from tha
 | [`../PROJECT.md`](../PROJECT.md) | Canonical product requirements and boundaries. |
 | [`architecture/v1.md`](architecture/v1.md) | Approved V1 target architecture, stack, trust boundaries, and risks. |
 | [`plans/vertical-slice-1.md`](plans/vertical-slice-1.md) | The only implementation milestone currently authorized. |
+| [`HANDOFF.md`](HANDOFF.md) | Current deployment state and the next implementation action. |
 | [`contracts/README.md`](contracts/README.md) | Contract ownership and versioning rules. |
 | [`decisions/`](decisions/) | Short architecture decision records (ADRs). |
 
