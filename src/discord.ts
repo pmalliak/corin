@@ -7,6 +7,27 @@ export const DiscordInteractionType = {
   ApplicationCommand: 2,
 } as const;
 
+export interface DiscordEmbedField {
+  name: string;
+  value: string;
+  inline?: boolean;
+}
+
+export interface DiscordEmbed {
+  title?: string;
+  url?: string;
+  description?: string;
+  color?: number;
+  fields?: DiscordEmbedField[];
+  footer?: { text: string };
+}
+
+export interface DiscordMessage {
+  content?: string;
+  embeds?: DiscordEmbed[];
+  components?: unknown[];
+}
+
 export async function verifyDiscordRequest(request: Request, publicKeyHex: string): Promise<string | null> {
   const signatureHex = request.headers.get("x-signature-ed25519");
   const timestamp = request.headers.get("x-signature-timestamp");
@@ -27,8 +48,8 @@ function hexToBytes(value: string): Uint8Array {
   return Uint8Array.from(value.match(/.{1,2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
 }
 
-export function interactionResponse(content: string): Response {
-  return Response.json({ type: 4, data: { content, flags: 64 } });
+export function interactionResponse(message: DiscordMessage): Response {
+  return Response.json({ type: 4, data: { ...message, flags: 64 } });
 }
 
 export function discordUserId(interaction: { member?: { user?: { id?: string } }; user?: { id?: string } }): string | null {
@@ -46,11 +67,11 @@ export interface DeferredInteraction {
   token: string;
 }
 
-export async function editOriginalInteractionResponse(interaction: DeferredInteraction, content: string): Promise<void> {
+export async function editOriginalInteractionResponse(interaction: DeferredInteraction, message: DiscordMessage): Promise<void> {
   const response = await fetch(`https://discord.com/api/v10/webhooks/${interaction.applicationId}/${interaction.token}/messages/@original`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content: "", embeds: [], components: [], ...message }),
   });
   if (!response.ok) console.error("Discord follow-up failed", response.status, await response.text());
 }

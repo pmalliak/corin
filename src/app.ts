@@ -6,7 +6,9 @@ import {
   interactionResponse,
   verifyDiscordRequest,
   type DeferredInteraction,
+  type DiscordMessage,
 } from "./discord";
+import { failureMessage, pairingMessage, plainMessage, setupMessage, statusMessage, unknownCommandMessage } from "./messages";
 import { D1CoachRepository } from "./repositories";
 import type { DeviceAuthenticationRepository, DeviceStatus, DeviceStatusRepository, Env, PairingCodeRepository } from "./types";
 
@@ -14,7 +16,7 @@ interface Dependencies {
   pairingCodes: PairingCodeRepository;
   deviceStatus: DeviceStatusRepository;
   deviceAuthentication: DeviceAuthenticationRepository;
-  followUp(interaction: DeferredInteraction, content: string): Promise<void>;
+  followUp(interaction: DeferredInteraction, message: DiscordMessage): Promise<void>;
   now(): Date;
 }
 
@@ -34,6 +36,7 @@ export function createApp(env: Env, ctx: Waiter, dependencies: Dependencies = de
     fetch: async (request: Request): Promise<Response> => {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health") return new Response("ok");
+      if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/download") return handleAgentDownload(request, env);
       if (request.method === "POST" && url.pathname === "/interactions") return handleInteraction(request, env, ctx, dependencies);
       if (request.method === "POST" && url.pathname === "/agent/pair") return handlePairingExchange(request, dependencies);
       if (request.method === "GET" && url.pathname === "/agent/session") return handleDeviceSession(request, env, dependencies);
@@ -60,17 +63,20 @@ async function handleInteraction(request: Request, env: Env, ctx: Waiter, depend
   const interaction = JSON.parse(body) as DiscordInteraction;
   if (interaction.type === DiscordInteractionType.Ping) return Response.json({ type: 1 });
   if (interaction.type !== DiscordInteractionType.ApplicationCommand || interaction.data?.name !== "coach") {
-    return interactionResponse("I don't recognize that command yet.");
+    return interactionResponse(unknownCommandMessage());
   }
 
+  // Where the coach may be used is set in the guild's own integration settings,
+  // so there is deliberately no channel check here.
   const userId = discordUserId(interaction);
-  if (!userId) return interactionResponse("I couldn't identify your Discord account.");
+  if (!userId) return interactionResponse(plainMessage("I couldn't identify your Discord account."));
 
   const subcommand = interaction.data.options?.[0]?.name;
-  if (subcommand !== "connect" && subcommand !== "status") return interactionResponse("Try `/coach connect` or `/coach status`.");
+  if (subcommand === "setup") return interactionResponse(setupMessage(agentDownloadUrl(request)));
+  if (subcommand !== "connect" && subcommand !== "status") return interactionResponse(unknownCommandMessage());
 
   const deferred = deferralTarget(interaction);
-  if (!deferred) return interactionResponse("I couldn't reply to that interaction.");
+  if (!deferred) return interactionResponse(plainMessage("I couldn't reply to that interaction."));
 
   // Discord abandons an interaction after three seconds, which D1 and the session
   // Durable Object can exceed together, so acknowledge first and edit the reply after.
@@ -78,30 +84,52 @@ async function handleInteraction(request: Request, env: Env, ctx: Waiter, depend
   return deferredInteractionResponse();
 }
 
+function agentDownloadUrl(request: Request): string {
+  return new URL("/download", request.url).toString();
+}
+
 async function completeCoachCommand(subcommand: "connect" | "status", userId: string, deferred: DeferredInteraction, dependencies: Dependencies): Promise<void> {
-  let content: string;
+  let message: DiscordMessage;
   try {
-    content = subcommand === "connect" ? await connectContent(userId, dependencies) : await statusContent(userId, dependencies);
+    message = subcommand === "connect" ? await connectMessage(userId, dependencies) : await currentStatusMessage(userId, dependencies);
   } catch (error) {
     console.error(`/coach ${subcommand} failed`, error);
-    content = "Something went wrong on my side. Try again in a moment.";
+    message = failureMessage();
   }
-  await dependencies.followUp(deferred, content);
+  await dependencies.followUp(deferred, message);
 }
 
-async function connectContent(userId: string, dependencies: Dependencies): Promise<string> {
-  const pairing = await dependencies.pairingCodes.create(userId, dependencies.now());
-  return `Enter this pairing code in the LoL Coach Agent: \`${pairing.value}\`\nIt expires at <t:${Math.floor(pairing.expiresAt.getTime() / 1_000)}:R>.`;
+async function connectMessage(userId: string, dependencies: Dependencies): Promise<DiscordMessage> {
+  return pairingMessage(await dependencies.pairingCodes.create(userId, dependencies.now()));
 }
 
-async function statusContent(userId: string, dependencies: Dependencies): Promise<string> {
-  const status = await dependencies.deviceStatus.getForDiscordUser(userId, dependencies.now());
-  return `Agent: ${status.agent}\nLeague: ${status.league}\nLive API: ${status.liveApi}\nCurrent game: ${status.currentGame}`;
+async function currentStatusMessage(userId: string, dependencies: Dependencies): Promise<DiscordMessage> {
+  return statusMessage(await dependencies.deviceStatus.getForDiscordUser(userId, dependencies.now()));
 }
 
 function deferralTarget(interaction: DiscordInteraction): DeferredInteraction | null {
   if (!interaction.application_id || !interaction.token) return null;
   return { applicationId: interaction.application_id, token: interaction.token };
+}
+
+/// The one link a friend needs. Served from the Worker rather than a bucket URL
+/// so it stays on this domain and the filename survives the download.
+const agentObjectKey = "corin-agent.exe";
+
+async function handleAgentDownload(request: Request, env: Env): Promise<Response> {
+  const object = await env.RELEASES.get(agentObjectKey, { onlyIf: request.headers });
+  if (!object) return new Response("The agent has not been published yet.", { status: 404 });
+
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("content-type", "application/octet-stream");
+  headers.set("content-disposition", `attachment; filename="${agentObjectKey}"`);
+  headers.set("cache-control", "public, max-age=300");
+
+  if (!("body" in object)) return new Response(null, { status: 304, headers });
+  if (request.method === "HEAD") return new Response(null, { headers });
+  return new Response(object.body, { headers });
 }
 
 async function handlePairingExchange(request: Request, dependencies: Dependencies): Promise<Response> {
