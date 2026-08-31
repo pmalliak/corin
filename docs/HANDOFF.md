@@ -61,14 +61,24 @@ WebSocket with a 20 second heartbeat and jittered reconnect backoff. A revoked
 device gets a 401 on connect, so the agent deletes its credential and asks for a
 new pairing rather than retrying forever.
 
-Game state comes from a `GameDataProvider`. Only the fixture implementation
-exists; `CORIN_FIXTURE=active` pins it to "in a game" for one-shot checks, and
-the default walks from nothing running to in game, one step per heartbeat. The
-real Live Client API provider is the next thing to write and goes behind the
-same trait.
+Game state comes from a `GameDataProvider`. The live implementation reads
+League's Live Client API on `127.0.0.1:2999` every five seconds in its own task,
+and combines it with the process list, because that API only exists during a game
+and its absence alone cannot tell a closed League from one sitting in a lobby.
+Setting `CORIN_FIXTURE` swaps in a scripted provider for testing without the game.
+
+Verified against a real game on 2026-08-31, including both transitions: leaving a
+game dropped Live API to Unavailable while League stayed Running, and the next
+game came back Active. Riot answers 404 on the loading screen, which the agent
+reads as "League is there, data is not yet" rather than as an error.
+
+Only the three status flags leave the machine. The real payload is roughly 60 KB
+carrying player identity, items, runes and an event log, and the struct the agent
+deserializes has one field.
 
 The release build is a single 2.3 MB executable. It is published to the
-`corin-releases` R2 bucket and served by the Worker at `GET /download`.
+`corin-releases` R2 bucket and served by the Worker at `GET /download`, verified
+by matching SHA-256 against the local build.
 
 ## Validation
 
@@ -81,11 +91,21 @@ cd agent && cargo test
 
 All pass at this handoff point: 14 Worker tests, 20 agent tests.
 
+## The first slice is complete
+
+League running locally, agent reading the Live Client API, backend knowing which
+Discord user owns that agent, `/coach status` reporting it. Every acceptance
+criterion in `plans/vertical-slice-1.md` holds except device revocation from
+Discord, which is listed below.
+
 ## Not built yet
 
-- The real Live Client API provider. Everything else in the first slice works.
+- Anything richer than the three status flags. Champion, level, KDA, CS, gold,
+  items and game time are all in the payload the agent already fetches, but
+  sending them needs a version 2 of the session contract.
 - Signing for the agent binary, so Windows SmartScreen warns on first run.
 - There is no way to revoke a device from Discord. The `devices.revoked_at`
   column exists and is honoured on every lookup, but only a manual D1 update
-  sets it.
-- Voice, OpenAI, push to talk, and real League data remain out of scope.
+  sets it. `/coach devices` and `/coach disconnect` are the natural home for it.
+- Nothing starts the agent with Windows yet, so a player has to run it each time.
+- Voice, OpenAI and push to talk remain out of scope until this slice is boring.

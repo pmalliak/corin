@@ -5,8 +5,8 @@ holds a single outbound WebSocket to the backend so `/coach status` can answer
 with real state. It never listens on a port and never holds a Discord, OpenAI, or
 Riot key.
 
-Right now it reports a scripted fixture rather than League. The real Live Client
-API provider lands behind the same `GameDataProvider` trait, so nothing else moves.
+It reads League's Live Client API on `127.0.0.1:2999`. A scripted fixture is still
+available behind the same `GameDataProvider` trait for testing without the game.
 
 ## Build
 
@@ -51,6 +51,31 @@ authenticates this machine until the device is revoked.
 
 If the backend rejects it, meaning the device was revoked, the agent deletes it
 and asks for a fresh pairing rather than retrying forever.
+
+## Reading League
+
+The Live Client API exists only while a game is actually running, so its absence
+says nothing on its own: League might be closed, or sitting in a lobby. The
+process list settles which, and the two together give the three reported states.
+
+| What the agent sees | League | Live API | Current game |
+| --- | --- | --- | --- |
+| API returns game data, `gameTime` above zero | Running | Available | Active |
+| API returns 404 or unreadable data, which is what a loading screen looks like | Running | Unavailable | Inactive |
+| Nothing on the port, but a League process exists | Running | Unavailable | Inactive |
+| Nothing on the port and no League process | Not detected | Unavailable | Inactive |
+
+Polling happens every five seconds in its own task, and `status()` reads the last
+answer, so a slow local API can never delay a heartbeat.
+
+Riot serves that API with a certificate signed by their own root, presented for
+`localhost`. Verification is disabled for that one client and only towards
+loopback, where there is nothing to intercept: reaching it already means having
+the machine. The client that talks to the backend keeps full verification.
+
+Only the three flags ever leave the machine. The real payload is around 60 KB of
+player identity, items, runes and a full event log; the struct this agent
+deserializes has exactly one field, so nothing else can leak by accident.
 
 ## Timing
 

@@ -4,6 +4,7 @@
 mod config;
 mod contract;
 mod credential;
+mod live_client;
 mod pairing;
 mod provider;
 mod session;
@@ -15,6 +16,7 @@ use anyhow::{Context, Result};
 
 use crate::config::Config;
 use crate::credential::{CredentialStore, KeyringStore, MemoryStore};
+use crate::live_client::LiveClientProvider;
 use crate::provider::{FixtureProvider, GameDataProvider};
 use crate::session::SessionEnd;
 
@@ -80,7 +82,7 @@ async fn pair(client: &reqwest::Client, config: &Config, store: &dyn CredentialS
 
 async fn serve(config: &Config, store: &dyn CredentialStore) -> Result<()> {
     let credential = store.load()?.context("no device credential is stored")?;
-    let provider: Arc<dyn GameDataProvider> = Arc::new(FixtureProvider::from_env());
+    let provider = game_data_provider().await?;
 
     println!("Reporting status to {}. Press Ctrl+C to stop.", config.base_url);
 
@@ -95,6 +97,16 @@ async fn serve(config: &Config, store: &dyn CredentialStore) -> Result<()> {
         }
         SessionEnd::Dropped(error) => Err(error),
     }
+}
+
+/// Real League data unless CORIN_FIXTURE asks for a scripted one, so a friend who
+/// just double clicks the binary gets the real thing without knowing it had a choice.
+async fn game_data_provider() -> Result<Arc<dyn GameDataProvider>> {
+    if std::env::var("CORIN_FIXTURE").is_ok() {
+        println!("Using a scripted fixture, not League.");
+        return Ok(Arc::new(FixtureProvider::from_env()));
+    }
+    Ok(Arc::new(LiveClientProvider::start().await?))
 }
 
 enum Command {

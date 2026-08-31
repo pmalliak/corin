@@ -1,6 +1,6 @@
 # LoL AI Voice Coach
 
-The current implementation is the beginning of the first vertical slice: Discord pairing, owner-scoped status, and an authenticated device-status WebSocket. Voice, OpenAI, PTT, and real League data are intentionally not implemented yet.
+The first vertical slice works end to end: a player pairs one PC from Discord, a local agent reads League's Live Client API, and `/coach status` reports that player's own game state. Voice, OpenAI and push-to-talk are intentionally not implemented yet, and the agent reports status only, not the full game state.
 
 Read [`PROJECT.md`](PROJECT.md) for product intent and [`docs/README.md`](docs/README.md) for the architecture record.
 
@@ -47,7 +47,7 @@ Every reply is ephemeral, so the channel stays quiet however many people are pai
 
 ## Local agent
 
-[`agent/`](agent/) is the Windows-first Rust agent that speaks that protocol. It reports a scripted fixture for now; the real Live Client API provider lands behind the same trait.
+[`agent/`](agent/) is the Windows-first Rust agent that speaks that protocol. It reads League's Live Client API on `127.0.0.1:2999` and reports whether League is running, whether that API answers, and whether a game is actually under way. Only those three flags leave the machine.
 
 ```sh
 cd agent
