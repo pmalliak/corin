@@ -27,7 +27,7 @@ npm test
 
 Both pass at this handoff point.
 
-## Immediate next step
+## Next external setup step
 
 Create/configure the Discord application, then provide its Application ID, Public Key, and private Discord Guild ID. Never share the Discord bot token in chat or commit it. Set the public key in Cloudflare before configuring Discord's Interactions Endpoint URL to:
 
@@ -35,4 +35,12 @@ Create/configure the Discord application, then provide its Application ID, Publi
 https://corin.panos-malliakoudis.workers.dev/interactions
 ```
 
-Then register `/coach connect` and `/coach status` for the private guild. The fixture-mode local agent and device WebSocket session are not built yet.
+Then register `/coach connect` and `/coach status` for the private guild.
+
+## In progress locally (not yet deployed)
+
+- `POST /agent/pair` exchanges a single-use pairing code for a device credential.
+- `GET /agent/session` validates that credential and proxies an outbound WebSocket to a per-device hibernating Durable Object.
+- The session accepts small, versioned `hello` and `heartbeat` status messages, validates them, and makes fresh state available to `/coach status` for 75 seconds.
+- Versioned JSON schemas are in `docs/contracts/`.
+- The Rust fixture-mode agent is still not built.

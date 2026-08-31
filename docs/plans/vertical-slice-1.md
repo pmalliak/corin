@@ -1,6 +1,6 @@
 # First Vertical Slice: Paired Agent Status
 
-Status: proposed; no product implementation is authorized until this plan is reviewed.
+Status: in progress.
 
 ## Outcome
 

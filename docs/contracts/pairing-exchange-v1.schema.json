@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://corin.example/contracts/pairing-exchange-v1.schema.json",
+  "title": "Corin pairing exchange request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "deviceName"],
+  "properties": {
+    "code": { "type": "string", "pattern": "^[A-Za-z0-9]{12}$" },
+    "deviceName": { "type": "string", "minLength": 1, "maxLength": 80 }
+  }
+}

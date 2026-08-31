@@ -1,4 +1,5 @@
 import { createApp } from "./app";
+export { DeviceSession } from "./device-session";
 import type { Env } from "./types";
 
 export default {

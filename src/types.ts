@@ -22,3 +22,7 @@ export interface PairingCodeRepository {
 export interface DeviceStatusRepository {
   getForDiscordUser(discordUserId: string, now: Date): Promise<DeviceStatus>;
 }
+
+export interface DeviceAuthenticationRepository {
+  authenticate(credential: string, now: Date): Promise<{ deviceId: string } | null>;
+}

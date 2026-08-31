@@ -1,9 +1,9 @@
 import { newOpaqueSecret, sha256 } from "./crypto";
-import type { DeviceStatus, DeviceStatusRepository, Env, PairingCode, PairingCodeRepository } from "./types";
+import type { DeviceAuthenticationRepository, DeviceStatus, DeviceStatusRepository, Env, PairingCode, PairingCodeRepository } from "./types";
 
 const pairingLifetimeMs = 10 * 60 * 1_000;
 
-export class D1CoachRepository implements PairingCodeRepository, DeviceStatusRepository {
+export class D1CoachRepository implements PairingCodeRepository, DeviceStatusRepository, DeviceAuthenticationRepository {
   public constructor(private readonly db: Env["COACH_DB"]) {}
 
   public async create(discordUserId: string, now: Date): Promise<PairingCode> {
@@ -30,7 +30,7 @@ export class D1CoachRepository implements PairingCodeRepository, DeviceStatusRep
   }
 
   public async redeem(code: string, deviceName: string, now: Date): Promise<{ deviceId: string; credential: string } | null> {
-    const codeHash = await sha256(code);
+    const codeHash = await sha256(code.toUpperCase());
     const matching = await this.db
       .prepare("SELECT id, user_id FROM pairing_codes WHERE code_hash = ? AND expires_at > ? AND consumed_at IS NULL")
       .bind(codeHash, now.toISOString())
@@ -67,5 +67,23 @@ export class D1CoachRepository implements PairingCodeRepository, DeviceStatusRep
     }
 
     return { agent: "Disconnected", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" };
+  }
+
+  public async getLatestDeviceIdForDiscordUser(discordUserId: string): Promise<string | null> {
+    const device = await this.db
+      .prepare("SELECT devices.id FROM devices INNER JOIN users ON users.id = devices.user_id WHERE users.discord_user_id = ? AND devices.revoked_at IS NULL ORDER BY devices.last_seen_at DESC, devices.created_at DESC LIMIT 1")
+      .bind(discordUserId)
+      .first<{ id: string }>();
+    return device?.id ?? null;
+  }
+
+  public async authenticate(credential: string, now: Date): Promise<{ deviceId: string } | null> {
+    const device = await this.db
+      .prepare("SELECT id FROM devices WHERE credential_hash = ? AND revoked_at IS NULL")
+      .bind(await sha256(credential))
+      .first<{ id: string }>();
+    if (!device) return null;
+    await this.db.prepare("UPDATE devices SET last_seen_at = ? WHERE id = ?").bind(now.toISOString(), device.id).run();
+    return { deviceId: device.id };
   }
 }

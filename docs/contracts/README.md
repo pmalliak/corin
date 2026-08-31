@@ -1,11 +1,7 @@
 # Contracts
 
-No implementation contracts exist yet. When the first vertical slice starts, this directory will contain versioned JSON Schema for:
-
-- device WebSocket authentication and hello;
-- heartbeat and normalized `AgentGameStatus`;
-- pairing-code exchange result;
-- error envelopes.
+- [`pairing-exchange-v1.schema.json`](pairing-exchange-v1.schema.json) defines the agent's one-time pairing request.
+- [`agent-session-v1.schema.json`](agent-session-v1.schema.json) defines authenticated `hello` and `heartbeat` WebSocket messages.
 
 Rules:
 

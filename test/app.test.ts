@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
-import type { DeviceStatusRepository, Env, PairingCode, PairingCodeRepository } from "../src/types";
+import type { DeviceAuthenticationRepository, DeviceStatusRepository, Env, PairingCode, PairingCodeRepository } from "../src/types";
 
 const encoder = new TextEncoder();
 let privateKey: CryptoKey;
@@ -34,6 +34,35 @@ describe("Discord interactions", () => {
     expect(body.data.content).toContain("Agent: Connected");
     expect(body.data.content).toContain("Current game: Active");
   });
+
+  it("exchanges a valid pairing code for a device credential", async () => {
+    const app = createApp(testEnv(), {
+      pairingCodes: {
+        ...fakePairingCodes,
+        redeem: async (code, deviceName) => code === "A1B2C3D4E5F6" && deviceName === "Panos PC" ? { deviceId: "device-1", credential: "a".repeat(64) } : null,
+      },
+      deviceStatus: fakeDeviceStatus,
+      deviceAuthentication: fakeDeviceAuthentication,
+      now: () => new Date("2026-08-31T12:00:00.000Z"),
+    });
+    const response = await app.fetch(new Request("https://coach.example/agent/pair", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "A1B2C3D4E5F6", deviceName: "Panos PC" }),
+    }));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ version: 1, deviceId: "device-1", credential: "a".repeat(64), sessionUrl: "https://coach.example/agent/session" });
+  });
+
+  it("rejects malformed pairing exchanges before redemption", async () => {
+    const response = await createApp(testEnv(), {
+      pairingCodes: fakePairingCodes,
+      deviceStatus: fakeDeviceStatus,
+      deviceAuthentication: fakeDeviceAuthentication,
+      now: () => new Date(),
+    }).fetch(new Request("https://coach.example/agent/pair", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }));
+    expect(response.status).toBe(400);
+  });
 });
 
 function command(subcommand: string) {
@@ -45,10 +74,11 @@ async function signedRequest(payload: unknown): Promise<Response> {
   const timestamp = "1725094800";
   const signature = new Uint8Array(await crypto.subtle.sign("Ed25519", privateKey, encoder.encode(timestamp + body)));
   const app = createApp(
-    { DISCORD_PUBLIC_KEY: publicKeyHex, COACH_DB: {} as D1Database } satisfies Env,
+    testEnv(),
     {
       pairingCodes: fakePairingCodes,
       deviceStatus: fakeDeviceStatus,
+      deviceAuthentication: fakeDeviceAuthentication,
       now: () => new Date("2026-08-31T12:00:00.000Z"),
     },
   );
@@ -65,6 +95,10 @@ async function signedRequest(payload: unknown): Promise<Response> {
   );
 }
 
+function testEnv(): Env {
+  return { DISCORD_PUBLIC_KEY: publicKeyHex, COACH_DB: {} as D1Database, DEVICE_SESSIONS: {} as Env["DEVICE_SESSIONS"] };
+}
+
 const fakePairingCodes: PairingCodeRepository = {
   create: async (): Promise<PairingCode> => ({ value: "PAIR-ME", expiresAt: new Date("2026-08-31T12:10:00.000Z") }),
   redeem: async () => null,
@@ -72,4 +106,8 @@ const fakePairingCodes: PairingCodeRepository = {
 
 const fakeDeviceStatus: DeviceStatusRepository = {
   getForDiscordUser: async () => ({ agent: "Connected", league: "Running", liveApi: "Available", currentGame: "Active" }),
+};
+
+const fakeDeviceAuthentication: DeviceAuthenticationRepository = {
+  authenticate: async () => null,
 };

@@ -1,6 +1,6 @@
 # LoL AI Voice Coach
 
-The current implementation is the beginning of the first approved vertical slice: Discord pairing and owner-scoped status. Voice, OpenAI, PTT, and real League data are intentionally not implemented yet.
+The current implementation is the beginning of the first vertical slice: Discord pairing, owner-scoped status, and an authenticated device-status WebSocket. Voice, OpenAI, PTT, and real League data are intentionally not implemented yet.
 
 Read [`PROJECT.md`](PROJECT.md) for product intent and [`docs/README.md`](docs/README.md) for the architecture record.
 
@@ -28,3 +28,7 @@ npm test
    ```
 
 The Worker endpoint validates Discord's Ed25519 signature before handling any interaction.
+
+## Agent protocol (in progress)
+
+`POST /agent/pair` exchanges a valid pairing code for a device credential. The agent then opens `GET /agent/session` as an outbound WebSocket with `Authorization: Bearer <credential>` and sends the versioned `hello`/`heartbeat` messages defined in [`docs/contracts/`](docs/contracts/). The local Rust fixture agent is the next unfinished component.

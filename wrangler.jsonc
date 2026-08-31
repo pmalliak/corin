@@ -17,5 +17,9 @@
       "database_id": "b47c2c5a-e62a-45da-b6f0-ea78d9a25306",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "DEVICE_SESSIONS", "class_name": "DeviceSession" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DeviceSession"] }]
 }
