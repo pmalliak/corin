@@ -19,6 +19,7 @@ function streamName(buffer: Buffer): string {
 export class VbanEndpoint extends EventEmitter {
   #socket = dgram.createSocket("udp4");
   #frame = 0;
+  #lastReceivedFrame: number | undefined;
   readonly #target: { host: string; port: number; stream: string };
   readonly #source: { port: number; stream: string };
 
@@ -41,6 +42,10 @@ export class VbanEndpoint extends EventEmitter {
       };
       const onListening = () => {
         this.#socket.off("error", onError);
+        // Voicemeeter delivers localhost VBAN in short bursts.  The default
+        // Windows UDP receive queue can overflow between Node event-loop turns,
+        // turning a clean voice stream into audible packet gaps.
+        this.#socket.setRecvBufferSize(4 * 1024 * 1024);
         resolve();
       };
       this.#socket.once("error", onError);
@@ -84,6 +89,12 @@ export class VbanEndpoint extends EventEmitter {
     const samples = message[5] + 1;
     const pcm = message.subarray(HEADER_BYTES);
     if (pcm.length !== samples * CHANNELS * BYTES_PER_SAMPLE) return;
+    const frame = message.readUInt32LE(24);
+    if (this.#lastReceivedFrame !== undefined) {
+      const expected = (this.#lastReceivedFrame + 1) >>> 0;
+      if (frame !== expected) this.emit("gap", { expected, received: frame });
+    }
+    this.#lastReceivedFrame = frame;
     this.emit("audio", { pcm, samples } satisfies AudioPacket);
   }
 }

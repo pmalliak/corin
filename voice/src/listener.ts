@@ -21,7 +21,7 @@ const BYTES_PER_SAMPLE = 2;
  * How much quiet ends an utterance. Long enough to survive the pause in the
  * middle of a sentence, short enough that the coach does not feel deaf.
  */
-const SILENCE_MS = 800;
+const SILENCE_MS = 400;
 
 /** Anything this short is a cough, a keyboard, or the tail of someone else. */
 const MIN_UTTERANCE_MS = 300;

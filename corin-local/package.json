@@ -4,12 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Local Discord-to-Voicemeeter bridge for ChatGPT Voice.",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.27.0",
     "opusscript": "^0.0.8",

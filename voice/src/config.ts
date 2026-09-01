@@ -38,6 +38,8 @@ export type Config = {
   /** Lets the coach read game state from the Worker. Without it, it has no eyes. */
   serviceToken: string;
   workerUrl: string;
+  /** Local-only UDP port receiving hold-to-talk state from the Windows agent. */
+  pttPort: number;
 };
 
 class MissingConfig extends Error {}
@@ -54,6 +56,14 @@ function required(name: string): string {
 
 function optional(name: string, fallback: string): string {
   return process.env[name]?.trim() || fallback;
+}
+
+function port(name: string, fallback: number): number {
+  const value = Number.parseInt(optional(name, String(fallback)), 10);
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) {
+    throw new MissingConfig(`${name} must be a UDP port from 1 to 65535.`);
+  }
+  return value;
 }
 
 export function loadConfig(): Config {
@@ -106,6 +116,7 @@ export function loadConfig(): Config {
       .filter(Boolean),
     serviceToken: process.env.COACH_SERVICE_TOKEN?.trim() ?? "",
     workerUrl: process.env.CORIN_WORKER_URL?.trim() ?? "",
+    pttPort: port("CORIN_PTT_PORT", 6979),
   };
 }
 

@@ -97,6 +97,10 @@ export type Coach = {
   sink: Sink;
   /** True while this speaker is on the streaming path, so the gated one leaves them alone. */
   isStreaming: (userId: string) => boolean;
+  /** Opens a Realtime line without requiring a wake word while the local PTT key is held. */
+  startPushToTalk: (asker: Asking) => void;
+  /** Stops the PTT line immediately when the key is released. */
+  stopPushToTalk: () => void;
   close: () => void;
 };
 
@@ -240,8 +244,11 @@ export function createCoach(options: CoachOptions): Coach {
    * false. In a game channel most sentences are said to teammates, and a coach
    * that replies to those is worse than a slow one.
    */
-  type Conversation = { userId: string; speaker: string; stop: () => void; timers: NodeJS.Timeout[] };
+  type Conversation = { userId: string; speaker: string; startedAt: number; stop: () => void; timers: NodeJS.Timeout[] };
   let conversation: Conversation | undefined;
+  let pushToTalkUserId: string | undefined;
+  let pushToTalkResponseUserId: string | undefined;
+  let pendingPushToTalkResponse: { asker: Asking; turnStartedAt: number } | undefined;
   let pending = Buffer.alloc(0);
   let appendedBytes = 0;
 
@@ -277,6 +284,7 @@ export function createCoach(options: CoachOptions): Coach {
   const holdConversationOpen = (): void => {
     if (!conversation) return;
     for (const timer of conversation.timers) clearTimeout(timer);
+    if (pushToTalkUserId === conversation.userId) return;
     conversation.timers = [
       setTimeout(() => endConversation("nobody said anything more"), options.followUpMs),
       setInterval(() => {
@@ -299,9 +307,61 @@ export function createCoach(options: CoachOptions): Coach {
       pending = Buffer.concat([pending, toModelAudio(pcm)]);
       if (pending.length >= APPEND_BYTES) flushAudio();
     });
-    conversation = { userId: asker.userId, speaker: asker.speaker, stop, timers: [] };
+    conversation = { userId: asker.userId, speaker: asker.speaker, startedAt: performance.now(), stop, timers: [] };
     listenContinuously();
     holdConversationOpen();
+  };
+
+  const startPushToTalk = (asker: Asking): void => {
+    if (pushToTalkUserId === asker.userId && conversation?.userId === asker.userId) return;
+    if (speaking) {
+      send({ type: "response.cancel" });
+      stopSpeaking();
+    }
+    endConversation("starting push-to-talk");
+    pushToTalkUserId = asker.userId;
+    const open = options.startStream;
+    if (!open || closed || socket?.readyState !== WebSocket.OPEN) return;
+    const stop = open(asker.userId, (pcm) => {
+      pending = Buffer.concat([pending, toModelAudio(pcm)]);
+      if (pending.length >= APPEND_BYTES) flushAudio();
+    });
+    conversation = { userId: asker.userId, speaker: asker.speaker, startedAt: performance.now(), stop, timers: [] };
+    // Releasing Shift defines the turn boundary, so the client commits audio
+    // directly instead of waiting for a silence detector to guess.
+    send({ type: "session.update", session: sessionConfig(null) });
+  };
+
+  const stopPushToTalk = (): void => {
+    const userId = pushToTalkUserId;
+    pushToTalkUserId = undefined;
+    const active = conversation;
+    if (!userId || !active || active.userId !== userId) return;
+    active.stop();
+    conversation = undefined;
+    flushAudio();
+    if (appendedBytes === 0) return;
+    pushToTalkResponseUserId = userId;
+    void (async () => {
+      if (active.speaker !== lastSpeaker) {
+        send({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: `${active.speaker} is speaking.` }],
+          },
+        });
+        lastSpeaker = active.speaker;
+      }
+      await sendGameState({ userId: active.userId, speaker: active.speaker });
+      if (closed || socket?.readyState !== WebSocket.OPEN) return;
+      pendingPushToTalkResponse = {
+        asker: { userId: active.userId, speaker: active.speaker },
+        turnStartedAt: active.startedAt,
+      };
+      send({ type: "input_audio_buffer.commit" });
+    })();
   };
 
   /** A sentence the open line just finished hearing.
@@ -358,6 +418,12 @@ export function createCoach(options: CoachOptions): Coach {
         target.write(converted.pcm);
         break;
       }
+      case "input_audio_buffer.committed": {
+        const pending = pendingPushToTalkResponse;
+        pendingPushToTalkResponse = undefined;
+        if (pending) requestResponse(pending.asker, pending.turnStartedAt);
+        break;
+      }
       case "response.output_audio_transcript.done":
         console.log(`[coach] said: ${String(event.transcript ?? "").trim()}`);
         break;
@@ -369,7 +435,11 @@ export function createCoach(options: CoachOptions): Coach {
         console.log(`[cost] ${meter.answered((event.response as { usage?: Parameters<typeof meter.answered>[0] })?.usage ?? {})}`);
         if (asking !== undefined) {
           lastAnswered = { speaker: asking.speaker, at: Date.now() };
-          beginConversation(asking);
+          if (pushToTalkResponseUserId === asking.userId) {
+            pushToTalkResponseUserId = undefined;
+          } else {
+            beginConversation(asking);
+          }
           asking = undefined;
         }
         speaking?.stream.end();
@@ -506,8 +576,12 @@ export function createCoach(options: CoachOptions): Coach {
   return {
     sink,
     isStreaming: (userId) => conversation?.userId === userId,
+    startPushToTalk,
+    stopPushToTalk,
     close: () => {
       closed = true;
+      pushToTalkUserId = undefined;
+      pendingPushToTalkResponse = undefined;
       endConversation("the coach is leaving");
       stopSpeaking();
       socket?.close();

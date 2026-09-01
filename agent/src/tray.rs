@@ -4,17 +4,68 @@
 //! icon. Tokio owns the main thread, so this module gives the tray its own tiny
 //! UI thread and leaves the agent's networking runtime alone.
 
-use std::sync::mpsc;
+use std::sync::{mpsc, OnceLock};
 use std::thread;
+use std::net::UdpSocket;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use anyhow::{Context, Result};
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIconBuilder,
 };
-use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, TranslateMessage, MSG};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LSHIFT, VK_RSHIFT};
+use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP};
 
 const QUIT_ID: &str = "quit";
+const PTT_PORT: u16 = 6979;
+const LEFT_SHIFT: u8 = 1;
+const RIGHT_SHIFT: u8 = 2;
+
+static PTT_SOCKET: OnceLock<UdpSocket> = OnceLock::new();
+static SHIFTS_DOWN: AtomicU8 = AtomicU8::new(0);
+
+unsafe extern "system" fn shift_hook(code: i32, wparam: windows::Win32::Foundation::WPARAM, lparam: windows::Win32::Foundation::LPARAM) -> windows::Win32::Foundation::LRESULT {
+    if code >= 0 {
+        let message = wparam.0 as u32;
+        let key = *(lparam.0 as *const KBDLLHOOKSTRUCT);
+        let bit = match key.vkCode {
+            value if value == VK_LSHIFT.0 as u32 => LEFT_SHIFT,
+            value if value == VK_RSHIFT.0 as u32 => RIGHT_SHIFT,
+            _ => 0,
+        };
+        if bit != 0 {
+            match message {
+                WM_KEYDOWN | WM_SYSKEYDOWN => set_shift(bit, true),
+                WM_KEYUP | WM_SYSKEYUP => set_shift(bit, false),
+                _ => {}
+            }
+        }
+    }
+    CallNextHookEx(None, code, wparam, lparam)
+}
+
+fn set_shift(bit: u8, down: bool) {
+    let mut previous = SHIFTS_DOWN.load(Ordering::Relaxed);
+    loop {
+        let next = if down { previous | bit } else { previous & !bit };
+        if next == previous {
+            return;
+        }
+        match SHIFTS_DOWN.compare_exchange_weak(previous, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => {
+                if (previous == 0) != (next == 0) {
+                    let event: &[u8] = if next == 0 { b"corin-ptt:off" } else { b"corin-ptt:on" };
+                    if let Some(socket) = PTT_SOCKET.get() {
+                        let _ = socket.send_to(event, ("127.0.0.1", PTT_PORT));
+                    }
+                }
+                return;
+            }
+            Err(actual) => previous = actual,
+        }
+    }
+}
 
 /// Starts the notification-area icon and waits until Windows has accepted it.
 ///
@@ -35,7 +86,16 @@ pub fn start() -> Result<()> {
 }
 
 fn run(ready: mpsc::SyncSender<std::result::Result<(), String>>) {
-    let status = MenuItem::with_id("status", "Corin is running", false, None);
+    let hotkey = UdpSocket::bind("127.0.0.1:0")
+        .ok()
+        .and_then(|socket| PTT_SOCKET.set(socket).ok())
+        .and_then(|_| unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(shift_hook), None, 0).ok() });
+    let status = MenuItem::with_id(
+        "status",
+        if hotkey.is_some() { "Corin is running - hold Shift to talk" } else { "Corin is running - Shift unavailable" },
+        false,
+        None,
+    );
     let separator = PredefinedMenuItem::separator();
     let quit = MenuItem::with_id(QUIT_ID, "Quit Corin", true, None);
     let menu = match Menu::with_items(&[&status, &separator, &quit]) {
@@ -77,6 +137,9 @@ fn run(ready: mpsc::SyncSender<std::result::Result<(), String>>) {
         while GetMessageW(&mut message, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
+        }
+        if let Some(hook) = hotkey {
+            let _ = windows::Win32::UI::WindowsAndMessaging::UnhookWindowsHookEx(hook);
         }
     }
 }

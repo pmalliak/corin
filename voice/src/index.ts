@@ -9,6 +9,7 @@
  */
 
 import { fileURLToPath } from "node:url";
+import { createSocket } from "node:dgram";
 
 import { ChannelType, Client, Events, GatewayIntentBits, PermissionsBitField } from "discord.js";
 import type { Guild, VoiceBasedChannel, VoiceState } from "discord.js";
@@ -70,6 +71,7 @@ const client = new Client({
 
 let listener: Listener | undefined;
 let coach: Coach | undefined;
+const ptt = createSocket("udp4");
 
 /**
  * Discord emits voice-state events reliably, while `channel.members` is only a
@@ -183,6 +185,40 @@ function leave(guildId: string, reason: string): void {
   connection.destroy();
 }
 
+function pushToTalkSpeaker(): { userId: string; speaker: string } | undefined {
+  const guild = client.guilds.cache.get(config.discordGuildId);
+  const connection = guild ? getVoiceConnection(guild.id) : undefined;
+  const channelId = connection?.joinConfig.channelId;
+  if (!guild || !channelId) return undefined;
+
+  const speakers = [...(humanVoiceChannels.get(guild.id)?.entries() ?? [])]
+    .filter(([, voiceChannelId]) => voiceChannelId === channelId)
+    .map(([userId]) => userId);
+  if (speakers.length !== 1) {
+    console.warn(`[ptt] ignored: expected one human in the channel, found ${speakers.length}`);
+    return undefined;
+  }
+  const userId = speakers[0];
+  if (!userId) return undefined;
+  return { userId, speaker: guild.members.cache.get(userId)?.displayName ?? userId };
+}
+
+ptt.on("message", (message, remote) => {
+  if (remote.address !== "127.0.0.1") return;
+  const event = message.toString("utf8");
+  if (event === "corin-ptt:on") {
+    const speaker = pushToTalkSpeaker();
+    if (!speaker || !coach) return;
+    console.log(`[ptt] live line open for ${speaker.speaker}`);
+    coach.startPushToTalk(speaker);
+  } else if (event === "corin-ptt:off") {
+    console.log("[ptt] live line closed");
+    coach?.stopPushToTalk();
+  }
+});
+ptt.on("error", (error) => console.error("[ptt] socket error:", error.message));
+ptt.bind(config.pttPort, "127.0.0.1", () => console.log(`[ptt] listening on 127.0.0.1:${config.pttPort}`));
+
 async function join(channel: VoiceBasedChannel): Promise<void> {
   console.log(`[voice] joining "${channel.name}"`);
   const connection = joinVoiceChannel({
@@ -280,6 +316,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     console.log("\n[shutdown] leaving the channel and logging out");
     leave(config.discordGuildId, "shutting down");
+    ptt.close();
     releaseLock();
     void client.destroy();
   });
