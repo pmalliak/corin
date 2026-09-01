@@ -56,10 +56,11 @@ Set a long random `MCP_BEARER_TOKEN` as a Worker secret and as the `MCP_BEARER_T
 A ChatGPT Project can be told to read a link before it answers, but it cannot send an `Authorization` header and it cannot speak MCP, so `/mcp` is out of reach for it. `GET /chatgpt/live-game` is the same read-only state as a plain-text page, with the secret in the URL:
 
 ```
+https://<worker-domain>/chatgpt/live-game/<CHATGPT_LIVE_TOKEN>
 https://<worker-domain>/chatgpt/live-game?<CHATGPT_LIVE_TOKEN>
 ```
 
-`?token=<CHATGPT_LIVE_TOKEN>` works too, for typing it by hand. The page reads only the account named by `MCP_DISCORD_USER_ID`, never accepts a user ID or any other parameter from the caller, and can change nothing. It answers `text/plain` with `cache-control: no-store` and `x-robots-tag: noindex, nofollow`.
+The path form is the one to hand to a reader that rewrites URLs, because a query survives fewer hands than a path does. All of these are the same secret: `?<secret>`, `?<secret>=`, which is what a fetcher produces when it parses the first form and writes it out again, and `?token=<secret>` for typing it by hand. A parameter appended after the secret is ignored rather than treated as a wrong secret, so a cache-buster like `&t=17` is safe to add. The page reads only the account named by `MCP_DISCORD_USER_ID`, takes no account or query from the caller, and can change nothing. It answers `text/plain` with `cache-control: no-store`, and deliberately no `x-robots-tag`: a URL nobody can reach without the secret is not something a crawler can index, and that header is read by the very fetchers this page exists for.
 
 ```sh
 npx wrangler secret put CHATGPT_LIVE_TOKEN   # 32+ random URL-safe characters: letters, digits, - and _
@@ -69,7 +70,7 @@ It is a separate secret from `MCP_BEARER_TOKEN` on purpose: rotating or removing
 
 Paste this into the Project's instructions:
 
-> Before answering anything about my current League of Legends game, fetch `https://<worker-domain>/chatgpt/live-game?<CHATGPT_LIVE_TOKEN>` and base your answer only on what that page says. It is a live read-only snapshot of my own game. If it says I am not in a game, say so instead of describing a match. Never invent champions, items, scores or events that are not on the page, and re-fetch it whenever I ask about the current state, because it changes every second.
+> Before answering anything about my current League of Legends game, fetch `https://<worker-domain>/chatgpt/live-game/<CHATGPT_LIVE_TOKEN>` and base your answer only on what that page says. It is a live read-only snapshot of my own game. If it says I am not in a game, say so instead of describing a match. Never invent champions, items, scores or events that are not on the page, and re-fetch it whenever I ask about the current state, because it changes every second.
 
 ## Private mobile coach
 
@@ -89,7 +90,9 @@ cargo test
 cargo build --release
 ```
 
-The release build is a single self-contained 2.3 MB executable with no runtime to install beside it, and it only ever makes outbound connections, so Windows never asks for a firewall exception.
+The release build is a single self-contained 2.7 MB executable with no runtime to install beside it, and it only ever makes outbound connections, so Windows never asks for a firewall exception. It is built for the windows subsystem, so a login goes straight to the tray with no console window on the way, and a console appears only where somebody is reading one: a terminal command, or the pairing prompt on a first double-click.
+
+The binary Windows starts at login is a copy under `%LOCALAPPDATA%Corin`, not the one in `agent/target/release`, because a startup entry pointing into a build directory breaks as soon as that directory moves. `npm run agent:install` builds, installs and restarts it in one step.
 
 ## Distributing the agent
 

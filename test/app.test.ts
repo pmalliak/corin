@@ -364,6 +364,10 @@ describe("the live-game page a ChatGPT Project reads", () => {
     createApp(testEnv(emptyReleases(), undefined, env), testContext(), { ...fakeDependencies(), ...overrides })
       .fetch(new Request(`https://coach.example/chatgpt/live-game${query}`));
 
+  const callPath = (path: string) =>
+    createApp(testEnv(emptyReleases(), undefined, configured), testContext(), fakeDependencies())
+      .fetch(new Request(`https://coach.example/chatgpt/live-game${path}`));
+
   it("takes the secret straight out of the query string", async () => {
     const response = await call(`?${token}`);
 
@@ -378,6 +382,18 @@ describe("the live-game page a ChatGPT Project reads", () => {
 
   it("takes the secret written as a named parameter too", async () => {
     expect((await call(`?token=${token}`)).status).toBe(200);
+  });
+
+  it("takes the secret the way a fetcher rewrites it", async () => {
+    // A reader that parses `?<secret>` and writes it out again puts the equals sign back.
+    expect((await call(`?${token}=`)).status).toBe(200);
+  });
+
+  it("takes the secret as a path, for a reader that drops the query", async () => {
+    expect((await callPath(`/${token}`)).status).toBe(200);
+    expect((await callPath(`/${token}/`)).status).toBe(200);
+    expect((await callPath("/wrong")).status).toBe(401);
+    expect((await callPath(`/${token}/extra`)).status).toBe(401);
   });
 
   it("survives a parameter appended after the secret", async () => {

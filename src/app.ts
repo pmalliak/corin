@@ -47,7 +47,7 @@ export function createApp(env: Env, ctx: Waiter, dependencies: Dependencies = de
       if (request.method === "POST" && url.pathname === "/agent/pair") return handlePairingExchange(request, dependencies);
       if (request.method === "GET" && url.pathname === "/agent/session") return handleDeviceSession(request, env, dependencies);
       if (request.method === "GET" && url.pathname === "/coach/state") return handleCoachState(request, url, env, dependencies);
-      if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/chatgpt/live-game") return handleChatgptLiveGame(request, url, env, dependencies);
+      if ((request.method === "GET" || request.method === "HEAD") && (url.pathname === "/chatgpt/live-game" || url.pathname.startsWith(liveGamePrefix))) return handleChatgptLiveGame(request, url, env, dependencies);
       return new Response("Not Found", { status: 404 });
     },
   };
@@ -243,7 +243,7 @@ async function handleChatgptLiveGame(request: Request, url: URL, env: Env, depen
   const expected = env.CHATGPT_LIVE_TOKEN;
   if (!expected) return new Response("Not Found", { status: 404 });
 
-  const presented = urlSecret(url);
+  const presented = pathSecret(url) ?? urlSecret(url);
   if (!presented || !(await secretsMatch(presented, expected))) return new Response("Unauthorized", { status: 401 });
   if (request.method === "HEAD") return reportResponse("");
 
@@ -257,21 +257,36 @@ async function handleChatgptLiveGame(request: Request, url: URL, env: Env, depen
 }
 
 /**
- * The secret as the guideline writes it, `?<secret>`, and as a person naturally
- * writes it by hand, `?token=<secret>`.
+ * Every shape the same secret arrives in.
  *
- * Only the first parameter is read, and a bare one at that. A fetcher that
- * appends a parameter of its own, or a cache-buster added by hand, must not turn
- * the secret into a miss.
+ * `?token=<secret>` is what a person writes by hand. `?<secret>` is what the
+ * guideline says, and a fetcher that parses the URL and writes it out again
+ * turns that into `?<secret>=`, because a parameter without a value is
+ * serialized with the equals sign put back. Reading the first parameter's name
+ * whenever it carries no value covers both, and a parameter appended after it,
+ * by a fetcher or by a cache-buster added by hand, no longer reads as a miss.
  */
 function urlSecret(url: URL): string | null {
   const named = url.searchParams.get("token");
   if (named) return named;
 
-  const first = url.search.slice(1).split("&")[0] ?? "";
-  if (first.length === 0 || first.includes("=")) return null;
+  for (const [name, value] of url.searchParams) {
+    return value.length === 0 && name.length > 0 ? name : null;
+  }
+  return null;
+}
+
+/**
+ * `/chatgpt/live-game/<secret>`, for a reader that keeps the path but drops or
+ * rewrites the query. It is the same secret; only where it sits differs.
+ */
+const liveGamePrefix = "/chatgpt/live-game/";
+
+function pathSecret(url: URL): string | null {
+  if (!url.pathname.startsWith(liveGamePrefix)) return null;
   try {
-    return decodeURIComponent(first);
+    const rest = decodeURIComponent(url.pathname.slice(liveGamePrefix.length)).replace(/\/+$/, "");
+    return rest.length > 0 && !rest.includes("/") ? rest : null;
   } catch {
     return null;
   }
