@@ -384,6 +384,34 @@ describe("the live-game page a ChatGPT Project reads", () => {
     expect((await call(`?token=${token}`)).status).toBe(200);
   });
 
+  it("takes the secret from the Authorization header, which is what a tool sends", async () => {
+    const response = await createApp(testEnv(emptyReleases(), undefined, configured), testContext(), fakeDependencies())
+      .fetch(new Request("https://coach.example/chatgpt/live-game", { headers: { authorization: `Bearer ${token}` } }));
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Agent: Connected");
+  });
+
+  it("answers a caller that asked for JSON with the report as one string", async () => {
+    const response = await createApp(testEnv(emptyReleases(), undefined, configured), testContext(), fakeDependencies())
+      .fetch(new Request("https://coach.example/chatgpt/live-game", { headers: { authorization: `Bearer ${token}`, accept: "application/json" } }));
+
+    expect(response.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(((await response.json()) as { report: string }).report).toContain("Agent: Connected");
+  });
+
+  it("describes itself as an operation a model may call", async () => {
+    const response = await createApp(testEnv(emptyReleases(), undefined, configured), testContext(), fakeDependencies())
+      .fetch(new Request("https://coach.example/chatgpt/openapi.json"));
+    const schema = (await response.json()) as { servers: Array<{ url: string }>; paths: Record<string, unknown>; components: unknown };
+
+    expect(response.status).toBe(200);
+    // The schema follows whatever domain served it, so it is never wrong about its own server.
+    expect(schema.servers[0]?.url).toBe("https://coach.example");
+    expect(Object.keys(schema.paths)).toEqual(["/chatgpt/live-game"]);
+    expect(JSON.stringify(schema)).not.toContain(token);
+  });
+
   it("takes the secret the way a fetcher rewrites it", async () => {
     // A reader that parses `?<secret>` and writes it out again puts the equals sign back.
     expect((await call(`?${token}=`)).status).toBe(200);

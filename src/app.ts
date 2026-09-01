@@ -47,6 +47,7 @@ export function createApp(env: Env, ctx: Waiter, dependencies: Dependencies = de
       if (request.method === "POST" && url.pathname === "/agent/pair") return handlePairingExchange(request, dependencies);
       if (request.method === "GET" && url.pathname === "/agent/session") return handleDeviceSession(request, env, dependencies);
       if (request.method === "GET" && url.pathname === "/coach/state") return handleCoachState(request, url, env, dependencies);
+      if (request.method === "GET" && url.pathname === "/chatgpt/openapi.json") return openApiResponse(request);
       if ((request.method === "GET" || request.method === "HEAD") && (url.pathname === "/chatgpt/live-game" || url.pathname.startsWith(liveGamePrefix))) return handleChatgptLiveGame(request, url, env, dependencies);
       return new Response("Not Found", { status: 404 });
     },
@@ -226,34 +227,84 @@ function robotsResponse(): Response {
 }
 
 /**
+ * A tool definition, so a model can call the endpoint itself.
+ *
+ * ChatGPT opens links a person put in the conversation. A link that lives in a
+ * project instruction is not that, and is refused before the request is made,
+ * which is a sound defence and not something to work around. An action is the
+ * way in: the model calls a declared operation rather than browsing a URL, and
+ * the secret travels in the Authorization header instead of the path.
+ *
+ * The server is read from the request, so the schema stays true on whatever
+ * domain served it, and it carries no secret of its own.
+ */
+function openApiResponse(request: Request): Response {
+  const schema = {
+    openapi: "3.1.0",
+    info: {
+      title: "Corin live game",
+      description: "Read-only live League of Legends state for one configured player.",
+      version: "1.0.0",
+    },
+    servers: [{ url: new URL(request.url).origin }],
+    paths: {
+      "/chatgpt/live-game": {
+        get: {
+          operationId: "getLiveGame",
+          summary: "Read the player's current League of Legends game",
+          description:
+            "Returns a live read-only snapshot of the player's own game: connection status and, while a game is under way, the match, the player's champion with items, runes, abilities and stats, both teams by champion, and the recent event log. Call it before answering anything about the current game, and again for every such question, because the state changes every second. Treat anything absent from the report as unknown.",
+          responses: {
+            "200": {
+              description: "The snapshot as one block of text.",
+              content: {
+                "application/json": {
+                  schema: { type: "object", properties: { report: { type: "string" } }, required: ["report"] },
+                },
+              },
+            },
+            "401": { description: "The token is wrong or missing." },
+          },
+        },
+      },
+    },
+    components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } } },
+    security: [{ bearerAuth: [] }],
+  };
+  return Response.json(schema, { headers: { "cache-control": "public, max-age=300" } });
+}
+
+/**
  * The same live state as a plain page, for a reader that can only open a URL.
  *
- * A ChatGPT Project can be told to read a link before it answers, but it cannot
- * send an Authorization header and it cannot speak MCP, so the secret has to
- * travel in the URL. That is exactly why this is its own route with its own
- * token: it is rotated or removed on its own, without touching the MCP endpoint
- * or the coach service token, and even in the wrong hands it reads one account,
- * the one named by MCP_DISCORD_USER_ID, and can change nothing.
+ * The secret is taken from the Authorization header, from the path, or from the
+ * query, in that order. A header is the strongest of the three and is what a
+ * tool sends; the other two exist for a reader that can only open a link, and a
+ * URL-borne secret is weaker because it lands in browser history, in whatever
+ * fetches the page, and in request logs.
  *
- * A URL-borne secret is weaker than a header: it lands in browser history, in
- * whatever fetches the page, and in request logs. It is a deliberate trade for
- * a client that has nowhere else to put a credential.
+ * Whichever way it arrives, this is its own token, rotated or removed without
+ * touching the MCP endpoint or the coach service token, and even in the wrong
+ * hands it reads one account, the one named by MCP_DISCORD_USER_ID, and can
+ * change nothing.
  */
 async function handleChatgptLiveGame(request: Request, url: URL, env: Env, dependencies: Dependencies): Promise<Response> {
   const expected = env.CHATGPT_LIVE_TOKEN;
   if (!expected) return new Response("Not Found", { status: 404 });
 
-  const presented = pathSecret(url) ?? urlSecret(url);
+  const presented = bearerValue(request.headers.get("authorization")) ?? pathSecret(url) ?? urlSecret(url);
   if (!presented || !(await secretsMatch(presented, expected))) return new Response("Unauthorized", { status: 401 });
-  if (request.method === "HEAD") return reportResponse("");
+
+  const wantsJson = request.headers.get("accept")?.toLowerCase().includes("application/json") ?? false;
+  if (request.method === "HEAD") return reportResponse("", 200, wantsJson);
 
   const discordUserId = env.MCP_DISCORD_USER_ID;
   if (!discordUserId || !/^\d{17,20}$/.test(discordUserId)) {
-    return reportResponse("Corin is not configured yet: no Discord account has been selected on the Worker.", 503);
+    return reportResponse("Corin is not configured yet: no Discord account has been selected on the Worker.", 503, wantsJson);
   }
 
   const snapshot = await dependencies.deviceStatus.getForDiscordUser(discordUserId, dependencies.now());
-  return reportResponse(liveGameReport(snapshot, dependencies.now()));
+  return reportResponse(liveGameReport(snapshot, dependencies.now()), 200, wantsJson);
 }
 
 /**
@@ -293,17 +344,20 @@ function pathSecret(url: URL): string | null {
 }
 
 /**
- * Plain text, because the reader is a language model and never a browser.
+ * Plain text, because the reader is a language model and never a browser. The
+ * same report comes back as one JSON string for a caller that asked for JSON,
+ * which is what a tool definition declares rather than a page.
  *
  * Deliberately no `x-robots-tag`. A URL nobody can reach without the secret is
  * not something a crawler can index anyway, and the header is read by the very
  * fetchers this page exists for, which can refuse a page that carries it.
  */
-function reportResponse(body: string, status = 200): Response {
-  return new Response(status === 200 && body.length === 0 ? null : body, {
+function reportResponse(body: string, status = 200, asJson = false): Response {
+  const empty = status === 200 && body.length === 0;
+  return new Response(empty ? null : asJson ? JSON.stringify({ report: body }) : body, {
     status,
     headers: {
-      "content-type": "text/plain; charset=utf-8",
+      "content-type": asJson ? "application/json; charset=utf-8" : "text/plain; charset=utf-8",
       // A player's live position is not something a cache should keep.
       "cache-control": "no-store, max-age=0",
     },

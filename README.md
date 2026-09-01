@@ -68,6 +68,14 @@ npx wrangler secret put CHATGPT_LIVE_TOKEN   # 32+ random URL-safe characters: l
 
 It is a separate secret from `MCP_BEARER_TOKEN` on purpose: rotating or removing it touches nothing else, and without it configured the route returns 404, so a deployment that has not been given one cannot be probed. A secret in a URL is weaker than one in a header, because it lands in browser history, in whatever fetches the page, and in request logs. That is the deliberate trade for a client with nowhere to put a credential. Rotate it by putting a new value in the secret and updating the Project guideline.
 
+### A project instruction cannot make it fetch
+
+ChatGPT opens links a person put in the conversation. A link that lives in a project instruction is not that, and is refused before the request is made, which is a sound defence against instructions that send a model to an arbitrary URL. So the guideline below works when the link is pasted into the chat, and the model will not fetch it on its own.
+
+For a model that calls it by itself, the endpoint also describes itself as an action at `GET /chatgpt/openapi.json`. In the GPT builder: **Create a GPT**, **Configure**, **Create new action**, **Import from URL** with `https://<worker-domain>/chatgpt/openapi.json`, then **Authentication**, **API Key**, **Auth Type: Bearer**, and paste `CHATGPT_LIVE_TOKEN`. The secret then travels in the `Authorization` header rather than in a URL, which is the strongest of the three ways in. The schema names its own server from whatever domain served it and carries no secret.
+
+The same report comes back as `{"report": "..."}` for a caller that sends `Accept: application/json`, which is what the action declares.
+
 Paste this into the Project's instructions:
 
 > Before answering anything about my current League of Legends game, fetch `https://<worker-domain>/chatgpt/live-game/<CHATGPT_LIVE_TOKEN>` and base your answer only on what that page says. It is a live read-only snapshot of my own game. If it says I am not in a game, say so instead of describing a match. Never invent champions, items, scores or events that are not on the page, and re-fetch it whenever I ask about the current state, because it changes every second.
