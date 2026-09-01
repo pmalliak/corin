@@ -48,9 +48,11 @@ async fn run() -> Result<()> {
     // The Run key passes --background, which is a mode rather than a command, so it
     // is handled and then dropped before anything tries to read it as one.
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    if arguments.iter().any(|argument| argument == autostart::BACKGROUND_FLAG) {
+    let background = arguments.iter().any(|argument| argument == autostart::BACKGROUND_FLAG);
+    if background {
         autostart::release_console();
     }
+    let opened_by_double_click = !background && autostart::owns_console();
     let arguments = arguments.into_iter().filter(|argument| argument != autostart::BACKGROUND_FLAG);
 
     match Command::parse(arguments)? {
@@ -72,12 +74,18 @@ async fn run() -> Result<()> {
         }
         Command::Pair(code) => {
             pair(&client, &config, store.as_ref(), &code).await?;
+            if opened_by_double_click {
+                autostart::release_console();
+            }
             serve(&config, store.as_ref()).await
         }
         Command::Run => {
             if store.load()?.is_none() {
                 let code = prompt_for_pairing_code()?;
                 pair(&client, &config, store.as_ref(), &code).await?;
+            }
+            if opened_by_double_click {
+                autostart::release_console();
             }
             serve(&config, store.as_ref()).await
         }

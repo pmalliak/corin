@@ -60,9 +60,9 @@ mod platform {
         }
     }
 
-    /// Hides the console window the Run key hands us, so login does not leave a
-    /// black window sitting there. It flashes for an instant first; a tray build
-    /// is what removes that for good.
+    /// Hides the console window once the agent is ready to live in the tray.
+    /// This is used both by the Run key and by a paired agent opened with a
+    /// double-click.
     ///
     /// Deliberately hidden rather than freed: `FreeConsole` invalidates stdout, and
     /// Rust's `println!` panics when a write fails, so the agent would die on the
@@ -80,6 +80,18 @@ mod platform {
                 let _ = ShowWindow(window, SW_HIDE);
             }
         }
+    }
+
+    /// True when this process owns the console it is attached to. Explorer makes
+    /// exactly that one-process console for a double-click; a terminal also has
+    /// its shell attached, so commands such as `corin-agent status` stay visible.
+    pub fn owns_console() -> bool {
+        use windows::Win32::System::Console::GetConsoleProcessList;
+
+        let mut processes = [0_u32; 2];
+        // A one-entry result means only this process is attached. Supplying two
+        // slots also lets Windows report "at least two" without allocating.
+        unsafe { GetConsoleProcessList(&mut processes) == 1 }
     }
 }
 
@@ -100,9 +112,13 @@ mod platform {
     }
 
     pub fn release_console() {}
+
+    pub fn owns_console() -> bool {
+        false
+    }
 }
 
-pub use platform::{current, disable, enable, release_console};
+pub use platform::{current, disable, enable, owns_console, release_console};
 
 pub fn is_enabled() -> bool {
     current().unwrap_or(None).is_some()
