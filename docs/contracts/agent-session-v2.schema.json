@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://corin.example/contracts/agent-session-v2.schema.json",
+  "title": "Corin agent session message v2",
+  "description": "Adds normalized current-game state to the v1 status flags. No player identity is carried: champion, team and position answer every question in the brief, so summoner names and Riot IDs are dropped at the agent rather than travelling and being stored.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "type", "requestId", "payload"],
+  "properties": {
+    "version": { "const": 2 },
+    "type": { "enum": ["hello", "heartbeat"] },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["league", "liveApi", "currentGame"],
+      "properties": {
+        "league": { "enum": ["Running", "Not detected"] },
+        "liveApi": { "enum": ["Available", "Unavailable"] },
+        "currentGame": { "enum": ["Active", "Inactive"] },
+        "game": {
+          "description": "Present only while a game is actually under way. Absent or null otherwise.",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/game" }]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "game": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "timeSeconds", "player", "participants"],
+      "properties": {
+        "mode": { "type": "string", "maxLength": 32 },
+        "map": { "type": "string", "maxLength": 32 },
+        "timeSeconds": { "type": "number", "minimum": 0 },
+        "player": { "$ref": "#/$defs/player" },
+        "participants": {
+          "type": "array",
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/participant" }
+        }
+      }
+    },
+    "player": {
+      "description": "The person who owns this device.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["champion", "team", "level", "kills", "deaths", "assists", "creepScore", "gold", "isDead"],
+      "properties": {
+        "champion": { "type": "string", "maxLength": 32 },
+        "team": { "enum": ["ORDER", "CHAOS"] },
+        "position": { "enum": ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY", "NONE"] },
+        "level": { "type": "integer", "minimum": 1, "maximum": 18 },
+        "kills": { "type": "integer", "minimum": 0 },
+        "deaths": { "type": "integer", "minimum": 0 },
+        "assists": { "type": "integer", "minimum": 0 },
+        "creepScore": { "type": "integer", "minimum": 0 },
+        "gold": { "type": "integer", "minimum": 0 },
+        "isDead": { "type": "boolean" },
+        "respawnSeconds": { "type": "number", "minimum": 0 },
+        "health": { "$ref": "#/$defs/gauge" },
+        "resource": { "$ref": "#/$defs/gauge" },
+        "abilityHaste": { "type": "number" },
+        "abilities": {
+          "description": "Rank of each ability, which is what cooldown questions need.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "q": { "type": "integer", "minimum": 0, "maximum": 5 },
+            "w": { "type": "integer", "minimum": 0, "maximum": 5 },
+            "e": { "type": "integer", "minimum": 0, "maximum": 5 },
+            "r": { "type": "integer", "minimum": 0, "maximum": 3 }
+          }
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "name"],
+            "properties": {
+              "id": { "type": "integer" },
+              "name": { "type": "string", "maxLength": 64 },
+              "count": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "participant": {
+      "description": "Everyone else in the match, identified only by champion.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["champion", "team", "level", "kills", "deaths", "assists", "creepScore", "isDead"],
+      "properties": {
+        "champion": { "type": "string", "maxLength": 32 },
+        "team": { "enum": ["ORDER", "CHAOS"] },
+        "position": { "enum": ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY", "NONE"] },
+        "level": { "type": "integer", "minimum": 1, "maximum": 18 },
+        "kills": { "type": "integer", "minimum": 0 },
+        "deaths": { "type": "integer", "minimum": 0 },
+        "assists": { "type": "integer", "minimum": 0 },
+        "creepScore": { "type": "integer", "minimum": 0 },
+        "isDead": { "type": "boolean" },
+        "respawnSeconds": { "type": "number", "minimum": 0 },
+        "isBot": { "type": "boolean" }
+      }
+    },
+    "gauge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "max"],
+      "properties": {
+        "current": { "type": "number", "minimum": 0 },
+        "max": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}

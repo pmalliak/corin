@@ -139,10 +139,11 @@ async fn connect(session_url: &str, credential: &str) -> Result<Socket, ConnectE
 }
 
 async fn send(writer: &mut Writer, message_type: SessionMessageType, provider: &dyn GameDataProvider) -> Result<()> {
-    let message = SessionMessage::new(message_type, provider.status());
+    let message = SessionMessage::new(message_type, provider.snapshot());
     let encoded = serde_json::to_string(&message).context("could not encode a session message")?;
+    let bytes = encoded.len();
     writer.send(Message::Text(encoded)).await.context("could not send a session message")?;
-    tracing::debug!(?message_type, "sent");
+    tracing::debug!(?message_type, bytes, "sent");
     Ok(())
 }
 

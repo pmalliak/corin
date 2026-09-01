@@ -19,8 +19,14 @@ export interface PairingCodeRepository {
   redeem(code: string, deviceName: string, now: Date): Promise<{ deviceId: string; credential: string } | null>;
 }
 
+/** The connection flags plus, when a game is under way, what is happening in it. */
+export interface DeviceSnapshot {
+  status: DeviceStatus;
+  game: import("./agent-contract").AgentGame | null;
+}
+
 export interface DeviceStatusRepository {
-  getForDiscordUser(discordUserId: string, now: Date): Promise<DeviceStatus>;
+  getForDiscordUser(discordUserId: string, now: Date): Promise<DeviceSnapshot>;
 }
 
 export interface DeviceAuthenticationRepository {

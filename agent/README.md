@@ -5,8 +5,9 @@ holds a single outbound WebSocket to the backend so `/coach status` can answer
 with real state. It never listens on a port and never holds a Discord, OpenAI, or
 Riot key.
 
-It reads League's Live Client API on `127.0.0.1:2999`. A scripted fixture is still
-available behind the same `GameDataProvider` trait for testing without the game.
+It reads League's Live Client API on `127.0.0.1:2999` and normalizes it into the
+v2 session contract. A scripted fixture is still available behind the same
+`GameDataProvider` trait for testing without the game.
 
 ## Build
 

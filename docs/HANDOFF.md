@@ -72,9 +72,21 @@ game dropped Live API to Unavailable while League stayed Running, and the next
 game came back Active. Riot answers 404 on the loading screen, which the agent
 reads as "League is there, data is not yet" rather than as an error.
 
-Only the three status flags leave the machine. The real payload is roughly 60 KB
-carrying player identity, items, runes and an event log, and the struct the agent
-deserializes has one field.
+Since contract v2 the agent sends the whole match, not just the flags: the owner's
+champion stats, ability ranks, runes, items and score, every other player by
+champion with their score and build, and the recent event log. Around 17 KB per
+heartbeat, down from a 43 KB raw payload.
+
+What never travels is the identity of other players. Their summoner names and
+Riot IDs are dropped at the source, and match events have every name resolved to
+a champion first, since Riot names people directly in `ChampionKill` and friends.
+An unresolvable name becomes `Unknown` rather than being passed through. The
+owner's own Riot ID does travel, being their own data.
+
+Each message also carries a `matchKey`, a hash of the ten champions and their
+teams. Two devices reporting the same key are in one game, which is how the
+backend will be able to say who else from the server is in your match and on
+what champion, without any agent naming another player.
 
 `corin-agent autostart on` writes a per-user `Run` key, offered once at pairing
 and removed by `reset`. That entry passes `--background`, which hides the console
@@ -95,7 +107,7 @@ npm test
 cd agent && cargo test
 ```
 
-All pass at this handoff point: 13 Worker tests, 27 agent tests, and `cargo clippy` is clean.
+All pass at this handoff point: 21 Worker tests, 42 agent tests, and `cargo clippy` is clean.
 
 ## The first slice is complete
 
@@ -106,9 +118,9 @@ Discord, which is listed below.
 
 ## Not built yet
 
-- Anything richer than the three status flags. Champion, level, KDA, CS, gold,
-  items and game time are all in the payload the agent already fetches, but
-  sending them needs a version 2 of the session contract.
+- Grouping devices by `matchKey`, so `/coach status` can say who else from the
+  server is in your game. The key is transmitted and stored; nothing reads it yet,
+  which needs a D1 column and an index rather than any protocol change.
 - Signing for the agent binary, so Windows SmartScreen warns on first run.
 - There is no way to revoke a device from Discord. The `devices.revoked_at`
   column exists and is honoured on every lookup, but only a manual D1 update

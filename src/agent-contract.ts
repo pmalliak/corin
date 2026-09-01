@@ -6,30 +6,156 @@ export type AgentStatusPayload = {
   currentGame: Exclude<DeviceStatus["currentGame"], "Unknown">;
 };
 
+export type Team = "ORDER" | "CHAOS";
+
+export type AgentPlayer = {
+  champion: string;
+  team: Team;
+  level: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  creepScore: number;
+  gold: number;
+  isDead: boolean;
+  position?: string;
+  riotId?: string;
+};
+
+export type AgentParticipant = {
+  champion: string;
+  team: Team;
+  level: number;
+  kills: number;
+  deaths: number;
+  assists: number;
+  creepScore: number;
+  isDead: boolean;
+  position?: string;
+};
+
+export type AgentGame = {
+  /** Identifies the match, not the people in it. Two devices reporting the same key are in one game. */
+  matchKey: string;
+  mode: string;
+  timeSeconds: number;
+  player: AgentPlayer;
+  participants: AgentParticipant[];
+  /** Stats, runes, items, abilities and events. Carried through without being re-modelled here. */
+  detail?: Record<string, unknown>;
+};
+
 export type AgentMessage = {
-  version: 1;
+  version: 1 | 2;
   type: "hello" | "heartbeat";
   requestId: string;
   payload: AgentStatusPayload;
+  game: AgentGame | null;
 };
 
+/**
+ * Accepts v1 and v2. v2 adds the game alongside the same three flags, so a v1
+ * agent stays valid for as long as anyone is still running one.
+ *
+ * The flags are checked strictly because `/coach status` renders them. The game
+ * is checked down to the fields that get displayed, and the rest travels as
+ * opaque detail: re-modelling every League stat here would only add drift.
+ */
 export function parseAgentMessage(value: unknown): AgentMessage | null {
-  if (!isRecord(value) || value.version !== 1 || (value.type !== "hello" && value.type !== "heartbeat") || !isRequestId(value.requestId)) {
-    return null;
-  }
+  if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) return null;
+  if (value.type !== "hello" && value.type !== "heartbeat") return null;
+  if (!isRequestId(value.requestId)) return null;
+
   const payload = value.payload;
-  if (!isRecord(payload) || !isOneOf(payload.league, ["Running", "Not detected"]) || !isOneOf(payload.liveApi, ["Available", "Unavailable"]) || !isOneOf(payload.currentGame, ["Active", "Inactive"])) {
-    return null;
+  if (!isRecord(payload)) return null;
+  if (!isOneOf(payload.league, ["Running", "Not detected"])) return null;
+  if (!isOneOf(payload.liveApi, ["Available", "Unavailable"])) return null;
+  if (!isOneOf(payload.currentGame, ["Active", "Inactive"])) return null;
+
+  const game = payload.game === undefined || payload.game === null ? null : parseGame(payload.game);
+  if (payload.game !== undefined && payload.game !== null && game === null) return null;
+
+  return {
+    version: value.version,
+    type: value.type,
+    requestId: value.requestId,
+    payload: { league: payload.league, liveApi: payload.liveApi, currentGame: payload.currentGame },
+    game,
+  };
+}
+
+function parseGame(value: unknown): AgentGame | null {
+  if (!isRecord(value)) return null;
+  if (!isShortString(value.matchKey, 64) || !isShortString(value.mode, 32)) return null;
+  if (!isCount(value.timeSeconds)) return null;
+
+  const player = parsePlayer(value.player);
+  if (!player) return null;
+
+  const rawParticipants = value.participants;
+  if (!Array.isArray(rawParticipants) || rawParticipants.length > 10) return null;
+  const participants: AgentParticipant[] = [];
+  for (const entry of rawParticipants) {
+    const participant = parseParticipant(entry);
+    if (!participant) return null;
+    participants.push(participant);
   }
-  return { version: 1, type: value.type, requestId: value.requestId, payload: { league: payload.league, liveApi: payload.liveApi, currentGame: payload.currentGame } };
+
+  const { matchKey, mode, timeSeconds, player: _player, participants: _participants, ...detail } = value;
+  return {
+    matchKey: matchKey as string,
+    mode: mode as string,
+    timeSeconds: timeSeconds as number,
+    player,
+    participants,
+    ...(Object.keys(detail).length > 0 ? { detail } : {}),
+  };
+}
+
+function parsePlayer(value: unknown): AgentPlayer | null {
+  const base = parseParticipant(value);
+  if (!base || !isRecord(value) || !isCount(value.gold)) return null;
+  return {
+    ...base,
+    gold: value.gold,
+    ...(isShortString(value.riotId, 128) ? { riotId: value.riotId } : {}),
+  };
+}
+
+function parseParticipant(value: unknown): AgentParticipant | null {
+  if (!isRecord(value)) return null;
+  if (!isShortString(value.champion, 32)) return null;
+  if (!isOneOf(value.team, ["ORDER", "CHAOS"])) return null;
+  if (!isCount(value.level) || !isCount(value.kills) || !isCount(value.deaths) || !isCount(value.assists) || !isCount(value.creepScore)) return null;
+  if (typeof value.isDead !== "boolean") return null;
+
+  return {
+    champion: value.champion,
+    team: value.team,
+    level: value.level,
+    kills: value.kills,
+    deaths: value.deaths,
+    assists: value.assists,
+    creepScore: value.creepScore,
+    isDead: value.isDead,
+    ...(isShortString(value.position, 16) ? { position: value.position } : {}),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isRequestId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 128;
+}
+
+function isShortString(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {

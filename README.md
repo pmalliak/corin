@@ -1,6 +1,6 @@
 # LoL AI Voice Coach
 
-The first vertical slice works end to end: a player pairs one PC from Discord, a local agent reads League's Live Client API, and `/coach status` reports that player's own game state. Voice, OpenAI and push-to-talk are intentionally not implemented yet, and the agent reports status only, not the full game state.
+The first vertical slice works end to end: a player pairs one PC from Discord, a local agent reads League's Live Client API, and `/coach status` reports that player's own game state. Voice, OpenAI and push-to-talk are intentionally not implemented yet, and the agent now reports the full match state, not only the status flags.
 
 Read [`PROJECT.md`](PROJECT.md) for product intent and [`docs/README.md`](docs/README.md) for the architecture record.
 
@@ -37,7 +37,7 @@ The Worker endpoint validates Discord's Ed25519 signature before handling any in
 | --- | --- |
 | `/coach setup` | The whole install guide in one embed: a download button, six numbered steps, what the agent can and cannot see, and the failures worth knowing about. |
 | `/coach connect` | A single-use pairing code that lives ten minutes. |
-| `/coach status` | Agent, League, Live API and current game, each with an indicator and a colour that follows the worst of them. |
+| `/coach status` | Agent, League, Live API and current game, each with an indicator. During a game it adds champion, score, CS per minute, gold, level and both rosters by champion. |
 
 Every reply is ephemeral, so the channel stays quiet however many people are pairing. The command is registered as guild-install, guild-context only, and where it may be used is left to the guild's own command permissions.
 
@@ -47,7 +47,9 @@ Every reply is ephemeral, so the channel stays quiet however many people are pai
 
 ## Local agent
 
-[`agent/`](agent/) is the Windows-first Rust agent that speaks that protocol. It reads League's Live Client API on `127.0.0.1:2999` and reports whether League is running, whether that API answers, and whether a game is actually under way. Only those three flags leave the machine.
+[`agent/`](agent/) is the Windows-first Rust agent that speaks that protocol. It reads League's Live Client API on `127.0.0.1:2999` and sends the whole match: the owner's champion stats, ability ranks, runes, items and score, every other player by champion with their score and build, and the recent event log.
+
+What never leaves the machine is the identity of other players. Their summoner names and Riot IDs are dropped at the source, and match events have every name resolved to a champion first. See [`docs/contracts/`](docs/contracts/) for the rule and the tests that hold it.
 
 ```sh
 cd agent

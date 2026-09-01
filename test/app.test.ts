@@ -39,6 +39,41 @@ describe("Discord interactions", () => {
     expect(fields.map((field) => field.value)).toEqual(["🟢  Connected", "🟢  Running", "🟢  Available", "🟢  Active"]);
   });
 
+  it("shows the live game in /coach status once one is under way", async () => {
+    const { followUps } = await signedRequest(command("status"), {
+      deviceStatus: {
+        getForDiscordUser: async () => ({
+          status: { agent: "Connected" as const, league: "Running" as const, liveApi: "Available" as const, currentGame: "Active" as const },
+          game: fakeGame(),
+        }),
+      },
+    });
+
+    const text = textOf(followUps[0]?.message);
+    expect(text).toContain("Jinx");
+    expect(text).toContain("4 / 1 / 3");
+    expect(text).toContain("142");
+    expect(text).toContain("19:02");
+    expect(text).toContain("Thresh");
+    expect(text).toContain("Ahri");
+  });
+
+  it("never puts another player's name in a status reply", async () => {
+    const { followUps } = await signedRequest(command("status"), {
+      deviceStatus: {
+        getForDiscordUser: async () => ({
+          status: { agent: "Connected" as const, league: "Running" as const, liveApi: "Available" as const, currentGame: "Active" as const },
+          game: fakeGame(),
+        }),
+      },
+    });
+
+    const encoded = JSON.stringify(followUps[0]?.message);
+    for (const identity of ["summonerName", "riotIdGameName", "riotIdTagLine"]) {
+      expect(encoded).not.toContain(identity);
+    }
+  });
+
   it("answers /coach setup immediately with the full install guide", async () => {
     const { response } = await signedRequest(command("setup"));
     const payload = (await response.json()) as { type: number; data: DiscordMessage & { flags: number } };
@@ -209,8 +244,25 @@ const fakePairingCodes: PairingCodeRepository = {
 };
 
 const fakeDeviceStatus: DeviceStatusRepository = {
-  getForDiscordUser: async () => ({ agent: "Connected", league: "Running", liveApi: "Available", currentGame: "Active" }),
+  getForDiscordUser: async () => ({
+    status: { agent: "Connected", league: "Running", liveApi: "Available", currentGame: "Active" },
+    game: null,
+  }),
 };
+
+/** A game as the Durable Object would hand it back, champions only. */
+export function fakeGame() {
+  return {
+    matchKey: "0123456789abcdef0123456789abcdef",
+    mode: "CLASSIC",
+    timeSeconds: 1142,
+    player: { champion: "Jinx", team: "ORDER" as const, level: 11, kills: 4, deaths: 1, assists: 3, creepScore: 142, gold: 2140, isDead: false, position: "BOTTOM" },
+    participants: [
+      { champion: "Thresh", team: "ORDER" as const, level: 10, kills: 1, deaths: 2, assists: 8, creepScore: 24, isDead: false },
+      { champion: "Ahri", team: "CHAOS" as const, level: 11, kills: 2, deaths: 3, assists: 4, creepScore: 130, isDead: true },
+    ],
+  };
+}
 
 const fakeDeviceAuthentication: DeviceAuthenticationRepository = {
   authenticate: async () => null,

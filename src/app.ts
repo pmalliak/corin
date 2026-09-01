@@ -10,7 +10,7 @@ import {
 } from "./discord";
 import { failureMessage, pairingMessage, plainMessage, setupMessage, statusMessage, unknownCommandMessage } from "./messages";
 import { D1CoachRepository } from "./repositories";
-import type { DeviceAuthenticationRepository, DeviceStatus, DeviceStatusRepository, Env, PairingCodeRepository } from "./types";
+import type { DeviceAuthenticationRepository, DeviceSnapshot, DeviceStatus, DeviceStatusRepository, Env, PairingCodeRepository } from "./types";
 
 interface Dependencies {
   pairingCodes: PairingCodeRepository;
@@ -151,22 +151,22 @@ async function handleDeviceSession(request: Request, env: Env, dependencies: Dep
   return env.DEVICE_SESSIONS.getByName(device.deviceId).fetch(upstream);
 }
 
-const unpairedStatus: DeviceStatus = { agent: "Not paired", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" };
-const disconnectedStatus: DeviceStatus = { agent: "Disconnected", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" };
+const unpaired: DeviceSnapshot = { status: { agent: "Not paired", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" }, game: null };
+const disconnected: DeviceSnapshot = { status: { agent: "Disconnected", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" }, game: null };
 
 class DurableDeviceStatusRepository implements DeviceStatusRepository {
   public constructor(private readonly repository: D1CoachRepository, private readonly env: Env) {}
 
-  public async getForDiscordUser(discordUserId: string, _now: Date): Promise<DeviceStatus> {
+  public async getForDiscordUser(discordUserId: string, _now: Date): Promise<DeviceSnapshot> {
     const deviceId = await this.repository.getLatestDeviceIdForDiscordUser(discordUserId);
-    if (!deviceId) return unpairedStatus;
+    if (!deviceId) return unpaired;
     try {
       const response = await this.env.DEVICE_SESSIONS.getByName(deviceId).fetch("https://device-session/status", { headers: { "x-coach-internal-status": "1" } });
-      const status = await response.json();
-      return isDeviceStatus(status) ? status : disconnectedStatus;
+      const snapshot = await response.json();
+      return isDeviceSnapshot(snapshot) ? snapshot : disconnected;
     } catch (error) {
       console.error("Device session status lookup failed", error);
-      return disconnectedStatus;
+      return disconnected;
     }
   }
 }
@@ -218,6 +218,12 @@ function sessionHeaders(headers: Headers, deviceId: string): Headers {
   upstream.delete("x-coach-internal-status");
   upstream.set("x-coach-device-id", deviceId);
   return upstream;
+}
+
+function isDeviceSnapshot(value: unknown): value is DeviceSnapshot {
+  if (typeof value !== "object" || value === null) return false;
+  const snapshot = value as Record<string, unknown>;
+  return isDeviceStatus(snapshot.status) && (snapshot.game === null || typeof snapshot.game === "object");
 }
 
 function isDeviceStatus(value: unknown): value is DeviceStatus {
