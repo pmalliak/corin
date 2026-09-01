@@ -10,6 +10,7 @@
   "scripts": {
     "check": "node --env-file-if-exists=.env src/check.ts",
     "start": "node --env-file-if-exists=.env src/index.ts",
+    "test": "node --test src/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
@@ -19,7 +20,9 @@
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
     "@noble/ciphers": "^2.4.0",
+    "@types/ws": "^8.18.1",
     "discord.js": "^14.27.0",
-    "opusscript": "^0.0.8"
+    "opusscript": "^0.0.8",
+    "ws": "^8.21.3"
   }
 }

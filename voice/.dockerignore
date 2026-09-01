@@ -7,3 +7,4 @@ Dockerfile
 .dockerignore
 compose.yaml
 README.md
+.corin.lock

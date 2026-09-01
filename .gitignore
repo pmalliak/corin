@@ -4,3 +4,5 @@ node_modules/
 
 /agent/target
 .env
+.corin.lock
+voice/samples/

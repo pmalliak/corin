@@ -34,6 +34,12 @@ npm install
 npm run check
 ```
 
+Unit tests run on Node's own test runner, so they need no dependency:
+
+```sh
+npm test
+```
+
 `check` asks each service directly, because the only proof a credential works is
 the service saying so. A key can be correctly formatted, in the right file, and
 still be revoked, scoped read only, or on an account with no credit. Each row
@@ -47,6 +53,39 @@ small VPS rather than a gaming PC, because the OpenAI Realtime socket carries
 uncompressed PCM16 at 24 kHz in both directions, roughly half a megabit each
 way per active conversation. That is nothing in a datacenter and it is real
 contention on a home upstream during a game.
+
+## Where the coach may go
+
+It joins the voice channel holding the most people **that it is allowed to
+enter**, follows them if they move, and leaves when the last one does.
+
+Allowed means Discord permissions: View Channel, Connect and Speak. Give those
+to one channel only and that is the only place the coach can ever appear; take
+Connect away from a channel and it stops entering it. No restart, no deploy,
+and it is set in the same place as every other permission on the server. That
+is the same choice the Worker already makes about who may run `/coach`.
+
+`COACH_CHANNEL_ID` pins it to one channel outright, for when a permission is
+too blunt an instrument.
+
+Only one host may run at a time. Two processes sharing a bot token do not
+queue, they steal the voice connection from each other, and the symptom is
+wrong behaviour rather than an error: an abandoned echo instance once answered
+a question by playing the asker their own voice back. A second start is refused
+against `.corin.lock`, and a lock left by a crashed process is taken over.
+
+## Staying up
+
+`@discordjs/ws` attaches an error handler to its gateway socket only when it
+runs shards in worker threads. In the single process mode used here, a reset
+connection arrives as an unhandled `error` event, which ends the process. That
+is not theoretical: the host died on its first idle night, logged in with
+nobody in a channel, from `ECONNRESET`.
+
+`resilience.ts` therefore logs transient network faults and carries on, since
+the gateway reconnects by itself, and exits on anything else so that a real
+defect restarts clean instead of running on in an unknown state. `compose.yaml`
+sets `restart: unless-stopped` for that second case.
 
 ## Running it on a server
 
