@@ -32,16 +32,6 @@ const REALTIME_URL = "wss://api.openai.com/v1/realtime";
 const MODEL_SAMPLE_RATE = 24_000;
 const RECONNECT_MS = 3_000;
 
-const GAME_STATE_TOOL = {
-  type: "function",
-  name: "get_game_state",
-  description:
-    "The current League game of whichever player is speaking: their champion, level, KDA, CS, gold, items and ability ranks, " +
-    "plus every ally and enemy by champion with their score and build, and the game clock. " +
-    "Call this for any question about what is happening in their match right now. Never guess these numbers.",
-  parameters: { type: "object", properties: {}, additionalProperties: false },
-} as const;
-
 // The players speak Greek with English League terms inside it, so the coach
 // does the same. Translating "cooldown" into Greek would be correct and
 // useless: nobody in the channel says it that way.
@@ -64,12 +54,10 @@ export const INSTRUCTIONS = [
   "Αν δεν ξέρεις, πες σκέτο ότι δεν το ξέρεις. Μία φράση, χωρίς επιφυλάξεις γύρω της.",
   "Πριν από τη φωνή κάθε παίκτη σου λέγεται ποιος μιλάει.",
   "Ξέρεις κανονικά το παιχνίδι και απαντάς ελεύθερα για champions, abilities, cooldowns, items, runes, objectives και matchups.",
-  "Για το match που παίζεται ΤΩΡΑ έχεις το εργαλείο get_game_state, που σου δίνει την κατάσταση αυτού που μιλάει:",
-  "champion, level, KDA, CS, gold, items, ability ranks, τον χρόνο του game και τους υπόλοιπους παίκτες ανά champion.",
-  "Κάλεσέ το για κάθε ερώτηση που αφορά το τωρινό τους παιχνίδι, και απάντα από αυτό που γυρίζει.",
-  "Το εργαλείο το καλείς ΣΙΩΠΗΛΑ. Μη λες τίποτα πριν ή ενώ το καλείς: ούτε Μισό, ούτε Τσεκάρω, ούτε Ένα δευτερόλεπτο.",
-  "Ο παίκτης πρέπει να ακούσει μόνο μία φορά τη φωνή σου, και αυτή να είναι η απάντηση.",
-  "Ποτέ μην εφεύρεις νούμερο για το τρέχον match. Αν το εργαλείο πει ότι δεν είναι συνδεδεμένος, πες τον λόγο σε μία πρόταση.",
+  "Πριν από κάθε ερώτηση σου δίνεται η ΤΡΕΧΟΥΣΑ κατάσταση του παιχνιδιού αυτού που ρωτάει, ως GAME STATE:",
+  "champion, level, KDA, CS, gold, items, ability ranks, ο χρόνος του game και οι υπόλοιποι παίκτες ανά champion.",
+  "Είναι ήδη μπροστά σου. Δεν χρειάζεται να το ζητήσεις, να το τσεκάρεις ή να πεις ότι θα το κοιτάξεις. Απάντα κατευθείαν από αυτό.",
+  "Ποτέ μην εφεύρεις νούμερο για το τρέχον match. Αν το GAME STATE λέει connected false, πες τον λόγο σε μία πρόταση.",
 ].join(" ");
 
 /**
@@ -143,41 +131,54 @@ export function createCoach(options: CoachOptions): Coach {
     player.stop(true);
   };
 
+  let stateItems = 0;
+  let previousStateItemId: string | undefined;
+
+  /**
+   * Hands the asker's current match over together with their question.
+   *
+   * This was a tool the model could call, and the model narrated every single
+   * call: "Μια στιγμή, θα σου πω" and then, in a second spoken turn, the answer.
+   * Two mouthfuls of a player's attention where one was asked for, and two
+   * billed responses instead of one. Fetching it here costs one request to our
+   * own Worker and removes both.
+   *
+   * The previous turn's state is deleted rather than left in the conversation.
+   * It is expensive to keep, and it is wrong: a match moves on, and a model that
+   * can see two clocks may read the older one.
+   */
+  const sendGameState = async (utterance: Utterance): Promise<void> => {
+    const read = options.readGameState;
+    if (!read) return;
+
+    let state: Record<string, unknown>;
+    try {
+      state = await read(utterance.userId);
+    } catch (error) {
+      state = { connected: false, why: "Could not reach the backend: " + describe(error) };
+    }
+    if (closed || socket?.readyState !== WebSocket.OPEN) return;
+
+    const id = "item_state_" + ++stateItems;
+    send({
+      type: "conversation.item.create",
+      item: {
+        id,
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "GAME STATE (" + utterance.speaker + "): " + JSON.stringify(state) }],
+      },
+    });
+    if (previousStateItemId) send({ type: "conversation.item.delete", item_id: previousStateItemId });
+    previousStateItemId = id;
+    console.log("[game] " + utterance.speaker + ": " + JSON.stringify(state).slice(0, 170));
+  };
+
   const beginSpeaking = (): PassThrough => {
     const stream = new PassThrough();
     speaking = { stream, carry: 0 };
     player.play(createAudioResource(stream, { inputType: StreamType.Raw }));
     return stream;
-  };
-
-  /**
-   * Answers the model's tool call with the asker's own game, then asks for the
-   * spoken reply. The asker is captured before the fetch, because the response
-   * that carried the call ends while the fetch is still in flight.
-   */
-  const serveGameState = async (callId: string, asker: Asking | undefined): Promise<void> => {
-    let output: Record<string, unknown>;
-    if (!options.readGameState) {
-      output = { connected: false, why: "This deployment has no link to the game backend." };
-    } else if (!asker) {
-      output = { connected: false, why: "It is not clear which player is asking." };
-    } else {
-      try {
-        output = await options.readGameState(asker.userId);
-      } catch (error) {
-        output = { connected: false, why: `Could not reach the backend: ${describe(error)}` };
-      }
-    }
-
-    console.log(`[game] ${asker?.speaker ?? "someone"}: ${JSON.stringify(output).slice(0, 220)}`);
-    if (closed || socket?.readyState !== WebSocket.OPEN) return;
-
-    send({
-      type: "conversation.item.create",
-      item: { type: "function_call_output", call_id: callId, output: JSON.stringify(output) },
-    });
-    asking = asker;
-    send({ type: "response.create" });
   };
 
   const handle = (event: { type?: string; [key: string]: unknown }): void => {
@@ -195,9 +196,6 @@ export function createCoach(options: CoachOptions): Coach {
       }
       case "response.output_audio_transcript.done":
         console.log(`[coach] said: ${String(event.transcript ?? "").trim()}`);
-        break;
-      case "response.function_call_arguments.done":
-        if (event.name === GAME_STATE_TOOL.name) void serveGameState(String(event.call_id), asking);
         break;
       case "response.done":
         console.log(`[cost] ${meter.answered((event.response as { usage?: Parameters<typeof meter.answered>[0] })?.usage ?? {})}`);
@@ -225,6 +223,7 @@ export function createCoach(options: CoachOptions): Coach {
     socket.on("open", () => {
       console.log(`[coach] connected to ${options.model}`);
       lastSpeaker = undefined;
+      previousStateItemId = undefined;
       send({
         type: "session.update",
         session: {
@@ -242,7 +241,6 @@ export function createCoach(options: CoachOptions): Coach {
               voice: options.voice,
             },
           },
-          ...(options.readGameState ? { tools: [GAME_STATE_TOOL], tool_choice: "auto" } : {}),
         },
       });
     });
@@ -320,6 +318,9 @@ export function createCoach(options: CoachOptions): Coach {
       });
       lastSpeaker = utterance.speaker;
     }
+
+    await sendGameState(utterance);
+    if (closed || socket?.readyState !== WebSocket.OPEN) return;
 
     send({
       type: "conversation.item.create",
