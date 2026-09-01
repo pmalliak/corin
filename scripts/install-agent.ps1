@@ -6,11 +6,15 @@
 # one command, and fixes the two things that go quiet when it is done by hand.
 #
 # The first is the startup entry itself, which is repointed when it names some
-# other binary. The second is the tray icon. Windows 11 keys a notification icon's
+# other binary. The second is the tray icon: Windows 11 keys a notification icon's
 # visibility to the executable's path, so an icon from a new path starts hidden in
-# the overflow however many times it has been promoted from an older one; the
-# entry under NotifyIconSettings only exists once the agent has created the icon,
-# which is why promoting it can need one more restart.
+# the overflow however many times it has been promoted from an older one.
+#
+# That second one can only be repaired for a path Windows already knows. It writes
+# the NotifyIconSettings entry on its own schedule, minutes after the icon first
+# appears rather than with it, so a genuinely new path has nothing to promote yet
+# and has to be dragged out of the overflow once by hand. Running this again later
+# finds the entry and makes it stick.
 #
 # Run it from the desktop session that should end up with the icon.
 #
@@ -46,13 +50,13 @@ function Stop-Agent {
 function Start-Agent {
     Start-Process -FilePath $installed -ArgumentList "--background"
 
-    # The tray icon is registered a moment after the process appears, so callers
-    # that read the registry next need the agent to have got that far.
     for ($attempt = 1; $attempt -le 20; $attempt++) {
         Start-Sleep -Milliseconds 250
         if (Get-Process -Name corin-agent -ErrorAction SilentlyContinue) { return }
     }
-    throw "the agent did not stay running, try it in a console without --background to see why"
+    # --background is also what keeps a failure quiet, so the way to see one is to
+    # drop the flag and let the agent print.
+    throw "the agent did not stay running. Run it without --background to see why."
 }
 
 # Windows holds the image open while it runs, so the copy is retried rather than
@@ -101,38 +105,18 @@ New-Item -ItemType Directory -Force -Path $InstallDirectory | Out-Null
 Copy-Agent
 Write-Host ("Installed {0:N0} bytes to {1}" -f (Get-Item $installed).Length, $installed)
 
-# Promote before the start when the icon is already known, so the common case
-# needs a single launch.
+# Before the start, because Explorer reads that value when the icon is created.
 $entry = Get-TrayIconEntry
-$promotedAlready = $false
-if ($entry) {
-    $current = (Get-ItemProperty -Path $entry.PSPath).IsPromoted
-    if ($current -eq 1) {
-        $promotedAlready = $true
-    } else {
-        New-ItemProperty -Path $entry.PSPath -Name "IsPromoted" -Value 1 -PropertyType DWord -Force | Out-Null
-        Write-Host "Tray icon moved out of the overflow."
-    }
+if (-not $entry) {
+    Write-Host "Windows has no tray icon on record for this path yet. If the icon is hidden, drag it out of the overflow once and it stays out."
+} elseif ((Get-ItemProperty -Path $entry.PSPath).IsPromoted -eq 1) {
+    Write-Host "Tray icon is already out of the overflow."
+} else {
+    New-ItemProperty -Path $entry.PSPath -Name "IsPromoted" -Value 1 -PropertyType DWord -Force | Out-Null
+    Write-Host "Tray icon moved out of the overflow."
 }
 
 Start-Agent
-
-# A first install has no entry to promote until the agent has made its icon, and
-# Explorer reads that value when the icon is created, so this one needs a restart.
-if (-not $entry) {
-    Start-Sleep -Seconds 2
-    $entry = Get-TrayIconEntry
-    if ($entry -and (Get-ItemProperty -Path $entry.PSPath).IsPromoted -ne 1) {
-        New-ItemProperty -Path $entry.PSPath -Name "IsPromoted" -Value 1 -PropertyType DWord -Force | Out-Null
-        Write-Host "Tray icon registered, moving it out of the overflow."
-        Stop-Agent
-        Start-Agent
-    } elseif (-not $entry) {
-        Write-Host "Windows has not registered a tray icon for this path yet. If it is hidden, drag it out of the overflow once."
-    }
-} elseif ($promotedAlready) {
-    Write-Host "Tray icon was already out of the overflow."
-}
 
 $startup = (Get-ItemProperty -Path $runKey -Name $runValue -ErrorAction SilentlyContinue).$runValue
 $expected = '"{0}" --background' -f $installed

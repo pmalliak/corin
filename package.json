@@ -7,6 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "npm run typecheck && wrangler d1 migrations apply COACH_DB --remote && wrangler deploy",
     "discord:register": "node scripts/register-commands.mjs",
+    "agent:install": "powershell -ExecutionPolicy Bypass -File scripts/install-agent.ps1",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

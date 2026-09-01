@@ -253,7 +253,7 @@ function openApiResponse(request: Request): Response {
           operationId: "getLiveGame",
           summary: "Read the player's current League of Legends game",
           description:
-            "Returns a live read-only snapshot of the player's own game: connection status and, while a game is under way, the match, the player's champion with items, runes, abilities and stats, both teams by champion, and the recent event log. Call it before answering anything about the current game, and again for every such question, because the state changes every second. Treat anything absent from the report as unknown.",
+            "Returns the player's live, read-only game snapshot. Call it before every current-game answer; state changes every second. Treat anything absent from the report as unknown.",
           responses: {
             "200": {
               description: "The snapshot as one block of text.",
@@ -268,7 +268,9 @@ function openApiResponse(request: Request): Response {
         },
       },
     },
-    components: { securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } } },
+    // The GPT Action validator expects `schemas` to be an object even when this
+    // small API has no reusable schemas.
+    components: { schemas: {}, securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } } },
     security: [{ bearerAuth: [] }],
   };
   return Response.json(schema, { headers: { "cache-control": "public, max-age=300" } });

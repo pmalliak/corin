@@ -77,11 +77,11 @@ Create a VBAN **IN** stream:
 | Port | `6980` |
 | Route | an unused input strip |
 
-On that strip enable only **B1**. In ChatGPT Voice select **Voicemeeter Output (VB-Audio Voicemeeter VAIO)** as its microphone/input. Do not send this strip to your speakers.
+On that strip enable only **B1**. Point the ChatGPT app's **microphone** at **Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)**. Do not send this strip to your speakers.
 
 ### ChatGPT → Discord
 
-In ChatGPT Voice select **Voicemeeter AUX Input (VB-Audio Voicemeeter AUX VAIO)** as its speakers/output. On the AUX virtual-input strip enable only **B2** (and disable B1).
+Point the ChatGPT app's **speakers** at **Voicemeeter AUX Input (VB-Audio Voicemeeter VAIO)**. On the AUX virtual-input strip enable only **B2** (and disable B1).
 
 Create a VBAN **OUT** stream:
 
@@ -89,11 +89,77 @@ Create a VBAN **OUT** stream:
 | --- | --- |
 | Stream name | `GPT_TO_CORIN` |
 | IP | `127.0.0.1` |
-| Port | `6981` |
+| Port | `6981`, and the panel has no field for it, see below |
 | Source | B2 |
 | Format | 48 kHz / Stereo / PCM 16-bit |
 
 This separation keeps ChatGPT's answer out of its own microphone and avoids a feedback loop. Use headphones for your own Discord client, and tell channel members that their audio is passed to ChatGPT.
+
+### Point the ChatGPT app at those devices
+
+The exact endpoint names come from the installed VB-Audio driver and are worth reading off the machine rather than copying from a guide. This build of the VAIO driver exposes one capture endpoint per bus, which is a gift: pick `B1` by name instead of guessing which "Voicemeeter Output" is which.
+
+```powershell
+Get-PnpDevice -Class AudioEndpoint -Status OK | Select-Object -ExpandProperty FriendlyName | Sort-Object
+```
+
+Two settings, and they must not be the same device or ChatGPT hears itself:
+
+| ChatGPT setting | Device | What it is |
+| --- | --- | --- |
+| Microphone | `Voicemeeter Out B1 (VB-Audio Voicemeeter VAIO)` | bus B1, fed by the VBAN IN strip, so it carries Discord |
+| Speakers | `Voicemeeter AUX Input (VB-Audio Voicemeeter VAIO)` | the AUX strip, which is routed to B2 and out over VBAN |
+
+The ChatGPT desktop app is a Store package running as a swarm of processes, so if it offers no device picker of its own, override it in Windows instead: **Settings → System → Sound → Volume mixer** (or `Win+Ctrl+V`) while a voice session is live, find ChatGPT in the app list, and set its input and output there. A per-app override survives the app restarting and leaves the system defaults alone, which matters because your own Discord client should stay on your headset.
+
+### The destination port is not in the VBAN panel
+
+The `UDP Port` box at the top of the VBAN window is the port Voicemeeter **listens on**. The port an outgoing stream **sends to** is a per stream value that the panel does not draw a column for, and it defaults to 6980. An out stream aimed at 127.0.0.1:6980 therefore talks to Voicemeeter's own receiver, and the panel gives the tell: the incoming header counts a stream you never configured, so `1 Streams Detected` becomes `2 Streams Detected`.
+
+Two ways to reach that value.
+
+**Through the Remote API**, which is scriptable and exact. `VoicemeeterRemote64.dll` ships with Voicemeeter and exposes `vban.outstream[i].port` alongside `.name`, `.ip`, `.on` and `.route`. Turn the stream off, set the values, turn it back on:
+
+```powershell
+$d = 'C:\Program Files (x86)\VB\Voicemeeter\VoicemeeterRemote64.dll'
+Add-Type -TypeDefinition @"
+using System.Runtime.InteropServices; using System.Text;
+public static class VM {
+  [DllImport(@"$d")] public static extern int VBVMR_Login();
+  [DllImport(@"$d")] public static extern int VBVMR_Logout();
+  [DllImport(@"$d", CharSet=CharSet.Ansi)] public static extern int VBVMR_SetParameterFloat(string n, float v);
+  [DllImport(@"$d", CharSet=CharSet.Ansi)] public static extern int VBVMR_SetParameterStringA(string n, string v);
+  [DllImport(@"$d", CharSet=CharSet.Ansi)] public static extern int VBVMR_GetParameterStringA(string n, StringBuilder v);
+}
+"@
+[void][VM]::VBVMR_Login()
+[void][VM]::VBVMR_SetParameterFloat("vban.outstream[0].on", 0)
+[void][VM]::VBVMR_SetParameterStringA("vban.outstream[0].name", "GPT_TO_CORIN")
+[void][VM]::VBVMR_SetParameterFloat("vban.outstream[0].port", 6981)
+[void][VM]::VBVMR_SetParameterFloat("vban.outstream[0].on", 1)
+[void][VM]::VBVMR_Logout()
+```
+
+**Or through the panel's own buttons.** `Save Config`, edit `port='6980'` to `port='6981'` on the `VBANStreamOut` line, `Load Config`.
+
+The same API reads back, which is the only way to see what the GUI hides. It is worth doing after any hand edit, because the stream name is the other invisible trap: a name typed with a leading space arrives as `" GPT_TO_CORIN"`, the panel renders it identically to the correct one, and `#read` drops every packet because it compares the 16 byte name field exactly.
+
+### Check the Voicemeeter side without clicking through the GUI
+
+Voicemeeter writes its whole state to XML, so the VBAN panel can be read instead of eyeballed. `status='1'` means the stream is on, `status='0'` means it is off and nothing moves.
+
+```bash
+grep -oE "<VBANStream(In|Out)[^>]*status='1'[^>]*>" \
+  "$USERPROFILE/Documents/Voicemeeter/VoicemeeterBanana_TodaySettings.xml"
+```
+
+Three things have to line up with `.env`, and each one fails silently on its own:
+
+- **The names match exactly.** `sendPcm` stamps `CORIN_TO_GPT` into every packet it sends, and `#read` throws away any packet whose name is not `GPT_TO_CORIN`. A single transposed letter in the Voicemeeter stream name looks like total silence, with no error anywhere.
+- **The out stream points at 6981, not 6980.** 6980 is Voicemeeter's own receiver. An out stream aimed there talks to itself and the bridge never sees a packet.
+- **Both streams are on.** A stream that is configured perfectly but left at `status='0'` behaves exactly like a wrong one.
+
+The file is the last saved state, not necessarily the live one. Treat a mismatch as a lead to check in the GUI, not as proof.
 
 ## What the process does
 

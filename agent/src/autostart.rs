@@ -2,9 +2,8 @@
 //!
 //! A per-user Run key, so no administrator rights and nothing to uninstall: the
 //! entry points at wherever the binary already sits, and removing it is one
-//! registry value. The entry passes `--background`, which the agent uses to let
-//! go of the console window it would otherwise leave open on every login.
-
+//! registry value. The entry passes `--background`, which tells the agent that a
+//! login has nobody in front of it: see `console` for what it does with that.
 
 /// The argument the Run entry passes, and the flag that means "no console".
 pub const BACKGROUND_FLAG: &str = "--background";
@@ -59,40 +58,6 @@ mod platform {
             Err(error) => Err(error).context("could not read the startup entry"),
         }
     }
-
-    /// Hides the console window once the agent is ready to live in the tray.
-    /// This is used both by the Run key and by a paired agent opened with a
-    /// double-click.
-    ///
-    /// Deliberately hidden rather than freed: `FreeConsole` invalidates stdout, and
-    /// Rust's `println!` panics when a write fails, so the agent would die on the
-    /// first line it printed. That failure only ever appears at login, which is
-    /// exactly where nobody is watching.
-    pub fn release_console() {
-        use windows::Win32::System::Console::GetConsoleWindow;
-        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
-
-        // Safety: both calls take a handle this process owns, and GetConsoleWindow
-        // returns a null handle when there is no console, which ShowWindow ignores.
-        unsafe {
-            let window = GetConsoleWindow();
-            if window != windows::Win32::Foundation::HWND::default() {
-                let _ = ShowWindow(window, SW_HIDE);
-            }
-        }
-    }
-
-    /// True when this process owns the console it is attached to. Explorer makes
-    /// exactly that one-process console for a double-click; a terminal also has
-    /// its shell attached, so commands such as `corin-agent status` stay visible.
-    pub fn owns_console() -> bool {
-        use windows::Win32::System::Console::GetConsoleProcessList;
-
-        let mut processes = [0_u32; 2];
-        // A one-entry result means only this process is attached. Supplying two
-        // slots also lets Windows report "at least two" without allocating.
-        unsafe { GetConsoleProcessList(&mut processes) == 1 }
-    }
 }
 
 #[cfg(not(windows))]
@@ -110,15 +75,9 @@ mod platform {
     pub fn current() -> Result<Option<String>> {
         Ok(None)
     }
-
-    pub fn release_console() {}
-
-    pub fn owns_console() -> bool {
-        false
-    }
 }
 
-pub use platform::{current, disable, enable, owns_console, release_console};
+pub use platform::{current, disable, enable};
 
 pub fn is_enabled() -> bool {
     current().unwrap_or(None).is_some()

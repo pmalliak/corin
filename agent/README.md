@@ -22,6 +22,17 @@ cargo test
 The release binary is at `target/release/corin-agent.exe`, self-contained, no
 runtime to install alongside it.
 
+The copy Windows starts at login is not that one. It lives in
+`%LOCALAPPDATA%Corin`, because a startup entry pointing into a build directory
+breaks the moment the directory moves. Building alone therefore changes nothing
+about the machine, and [`scripts/install-agent.ps1`](../scripts/install-agent.ps1)
+is what closes that gap:
+
+```powershell
+npm run agent:install              # build, install, restart
+npm run agent:install -- -SkipBuild
+```
+
 ## Use
 
 ```sh
@@ -101,9 +112,35 @@ with the credential.
 It is a per-user `Run` key, so no administrator rights, nothing installed, and
 nothing left behind but one registry value pointing at wherever the binary sits.
 
-The entry passes `--background`, which hides the console window rather than
-freeing it. Freeing it would invalidate stdout, and Rust panics when a print
-fails, so the agent would die on its first line: a failure that only ever happens
-at login, where nobody is watching. Once paired, Corin hides that console even
-when opened with a double-click and stays in the Windows notification area:
-right-click its icon to confirm it is running or quit it.
+The entry passes `--background`, which means nobody is watching: at that point the
+agent will not open a window or ask a question, and a machine that is somehow
+unpaired fails into the log instead of prompting an empty desk.
+
+## Windows and the console
+
+The binary is built for the windows subsystem, so Windows never gives it a console
+and a login never flashes a black rectangle on the way to the tray. A console
+appears only for the two moments somebody is reading:
+
+| How it was started | What is on screen |
+| --- | --- |
+| The `Run` key at login | Nothing but the tray icon |
+| Double-clicked, already paired | Nothing but the tray icon |
+| Double-clicked, not paired yet | A console asking for the pairing code, which closes itself once paired |
+| A command in a terminal | That terminal's own console |
+
+The terminal case is `AttachConsole`, and it replaces only the standard handles
+Windows left empty, so `corin-agent status > file` still writes to the file. One
+consequence is worth knowing: a windows-subsystem program does not hold the shell,
+so a command returns the prompt first and prints under it.
+
+Printing with no console at all is safe rather than fatal. `GetStdHandle` returns
+null for a process without one, and the standard library reports that as a
+successful write of nothing, which is why the earlier approach of freeing the
+console could not work: that leaves a handle which is present and invalid, and
+`println!` panics when a write fails.
+
+Once it is running, Corin sits in the notification area: right-click the icon to
+confirm it is running or to quit it. Windows 11 keys an icon's visibility to the
+executable's path, so the first run from a new location starts in the overflow
+behind the `^` arrow and has to be dragged out once.

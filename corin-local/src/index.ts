@@ -1,4 +1,3 @@
-import { PassThrough } from "node:stream";
 import { ChannelType, Client, Events, GatewayIntentBits, PermissionsBitField } from "discord.js";
 import type { Guild, VoiceBasedChannel } from "discord.js";
 import {
@@ -15,6 +14,7 @@ import {
 import prism from "prism-media";
 import { loadConfig } from "./config.ts";
 import { PcmMixer } from "./mixer.ts";
+import { JitterBuffer } from "./playback.ts";
 import { VbanEndpoint } from "./vban.ts";
 
 const config = loadConfig();
@@ -24,7 +24,7 @@ const needed = [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags
 let vban: VbanEndpoint | undefined;
 let mixer: PcmMixer | undefined;
 let receiverStop: (() => void) | undefined;
-let discordOutput: PassThrough | undefined;
+let discordOutput: JitterBuffer | undefined;
 
 function mayEnter(channel: VoiceBasedChannel, guild: Guild): boolean {
   if (channel.id === guild.afkChannelId) return false;
@@ -53,7 +53,7 @@ function wantedChannel(guild: Guild): VoiceBasedChannel | undefined {
 function stopListening(): void {
   receiverStop?.();
   receiverStop = undefined;
-  discordOutput?.end();
+  discordOutput?.close();
   discordOutput = undefined;
 }
 
@@ -72,6 +72,7 @@ function receiveDiscord(connection: VoiceConnection): () => void {
       if (stopped) return;
       stopped = true;
       active.delete(userId);
+      mixer?.forget(userId);
       opus.unpipe(decoder);
       opus.destroy();
       decoder.destroy();
@@ -101,7 +102,7 @@ async function join(channel: VoiceBasedChannel): Promise<void> {
   });
   await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
 
-  const output = new PassThrough();
+  const output = new JitterBuffer();
   const player = createAudioPlayer();
   player.on("error", (error) => console.error("[discord playback]", error.message));
   player.play(createAudioResource(output, { inputType: StreamType.Raw }));

@@ -1,8 +1,15 @@
 //! Corin agent. Pairs this machine to a Discord account once, then keeps an
 //! outbound session open so `/coach status` can report real League state.
+//!
+//! Built for the windows subsystem, so nothing reaches the screen unless the agent
+//! puts it there: the tray icon for as long as it runs, and a console only for
+//! somebody who typed a command or is waiting to paste a pairing code. The
+//! `console` module is where that is arranged.
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 
 mod autostart;
 mod config;
+mod console;
 mod contract;
 mod credential;
 mod live_client;
@@ -25,18 +32,33 @@ use crate::session::SessionEnd;
 
 #[tokio::main]
 async fn main() {
+    // The Run key passes --background. It is a mode rather than a command: nobody
+    // is watching a login, so nothing there may open a window or ask a question.
+    let background = std::env::args().any(|argument| argument == autostart::BACKGROUND_FLAG);
+
+    // Before the first print. With no console of any kind, every println! in this
+    // process quietly writes into nothing.
+    if !background {
+        console::attach_to_terminal();
+    }
+
     // rustls 0.23 refuses to pick a backend on its own once more than one could apply.
     let _ = rustls::crypto::ring::default_provider().install_default();
     init_tracing();
 
-    if let Err(error) = run().await {
+    if let Err(error) = run(background).await {
+        if !background {
+            console::open();
+        }
         eprintln!("\nCorin agent stopped: {error:#}");
-        wait_for_enter_if_launched_by_double_click();
+        if console::is_ours() {
+            wait_for_enter();
+        }
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<()> {
+async fn run(background: bool) -> Result<()> {
     let config = Config::from_env();
     let store: Box<dyn CredentialStore> = if config.use_keyring { Box::new(KeyringStore::new()) } else { Box::new(MemoryStore::new()) };
     let client = reqwest::Client::builder()
@@ -45,15 +67,9 @@ async fn run() -> Result<()> {
         .build()
         .context("could not build the HTTP client")?;
 
-    // The Run key passes --background, which is a mode rather than a command, so it
-    // is handled and then dropped before anything tries to read it as one.
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let background = arguments.iter().any(|argument| argument == autostart::BACKGROUND_FLAG);
-    if background {
-        autostart::release_console();
-    }
-    let opened_by_double_click = !background && autostart::owns_console();
-    let arguments = arguments.into_iter().filter(|argument| argument != autostart::BACKGROUND_FLAG);
+    // --background was read in main, so it is dropped here before anything tries to
+    // read it as a command.
+    let arguments = std::env::args().skip(1).filter(|argument| argument != autostart::BACKGROUND_FLAG);
 
     match Command::parse(arguments)? {
         Command::Autostart(action) => run_autostart(action),
@@ -74,19 +90,23 @@ async fn run() -> Result<()> {
         }
         Command::Pair(code) => {
             pair(&client, &config, store.as_ref(), &code).await?;
-            if opened_by_double_click {
-                autostart::release_console();
-            }
+            console::hide();
             serve(&config, store.as_ref()).await
         }
         Command::Run => {
             if store.load()?.is_none() {
+                // The code has to be typed somewhere, and a double-click starts with
+                // nowhere to type it. A login has nobody to ask in the first place.
+                anyhow::ensure!(
+                    !background,
+                    "this machine is not paired yet. Start the agent from your desktop and paste a code from /coach connect."
+                );
+                console::open();
                 let code = prompt_for_pairing_code()?;
                 pair(&client, &config, store.as_ref(), &code).await?;
             }
-            if opened_by_double_click {
-                autostart::release_console();
-            }
+            // Paired, so the console has done its job and Corin lives in the tray.
+            console::hide();
             serve(&config, store.as_ref()).await
         }
     }
@@ -278,10 +298,9 @@ fn prompt_for_pairing_code() -> Result<String> {
     unreachable!("the loop returns on the third attempt")
 }
 
-fn wait_for_enter_if_launched_by_double_click() {
-    if !std::io::stdin().is_terminal() {
-        return;
-    }
+/// Only ever for a console the agent opened itself, which closes with the process
+/// and would take the message with it. A terminal keeps its own scrollback.
+fn wait_for_enter() {
     eprint!("Press Enter to close.");
     let _ = std::io::stdout().flush();
     let mut discard = String::new();
