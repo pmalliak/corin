@@ -57,12 +57,12 @@ response instead of deferring.
 
 `agent/` holds the Rust agent. It pairs once, stores the device credential in the
 Windows Credential Manager through the `keyring` crate, and holds one outbound
-WebSocket with a 20 second heartbeat and jittered reconnect backoff. A revoked
+WebSocket with a 2 second heartbeat and jittered reconnect backoff. A revoked
 device gets a 401 on connect, so the agent deletes its credential and asks for a
 new pairing rather than retrying forever.
 
 Game state comes from a `GameDataProvider`. The live implementation reads
-League's Live Client API on `127.0.0.1:2999` every five seconds in its own task,
+League's Live Client API on `127.0.0.1:2999` every second in its own task,
 and combines it with the process list, because that API only exists during a game
 and its absence alone cannot tell a closed League from one sitting in a lobby.
 Setting `CORIN_FIXTURE` swaps in a scripted provider for testing without the game.

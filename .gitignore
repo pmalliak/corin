@@ -3,6 +3,7 @@ node_modules/
 .dev.vars
 
 /agent/target
+/agent/target-*
 .env
 .corin.lock
 voice/samples/

@@ -23,7 +23,9 @@ use crate::contract::{
 use crate::provider::GameDataProvider;
 
 const ALL_GAME_DATA: &str = "https://127.0.0.1:2999/liveclientdata/allgamedata";
-const POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// League's local Live Client API is served on loopback, so a one-second probe
+/// is cheap and makes time-sensitive calls such as CS, gold and KDA feel live.
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Kept to what advice can use. A forty minute game accumulates hundreds.

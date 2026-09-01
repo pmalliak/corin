@@ -66,7 +66,7 @@ process list settles which, and the two together give the three reported states.
 | Nothing on the port, but a League process exists | Running | Unavailable | Inactive |
 | Nothing on the port and no League process | Not detected | Unavailable | Inactive |
 
-Polling happens every five seconds in its own task, and `status()` reads the last
+Polling happens every second in its own task, and `status()` reads the last
 answer, so a slow local API can never delay a heartbeat.
 
 Riot serves that API with a certificate signed by their own root, presented for
@@ -80,8 +80,9 @@ deserializes has exactly one field, so nothing else can leak by accident.
 
 ## Timing
 
-Heartbeats go out every 20 seconds and the backend treats a device as connected
-for 75 seconds after the last one, so two lost beats are survivable. Reconnects
+Heartbeats carrying the latest snapshot go out every two seconds and the backend
+treats a device as connected for 75 seconds after the last one, so a brief
+network interruption is still survivable. Reconnects
 back off from 2 up to 60 seconds with jitter, and a session that stays up for a
 minute resets that budget.
 

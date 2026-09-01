@@ -7,9 +7,10 @@ use anyhow::{bail, Result};
 
 pub const DEFAULT_BASE_URL: &str = "https://corin.panos-malliakoudis.workers.dev";
 
-/// The backend drops a device to `Disconnected` after 75 seconds without a
-/// heartbeat, so this leaves room for two lost beats before that happens.
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+/// Live snapshots are sent every two seconds. This keeps the coach within a
+/// couple of seconds of the local League client while still leaving ample room
+/// below the backend's 75-second disconnect threshold for a brief outage.
+pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
 
 pub const FIRST_RECONNECT_DELAY: Duration = Duration::from_secs(2);
 pub const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
