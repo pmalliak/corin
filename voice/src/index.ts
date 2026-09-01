@@ -11,7 +11,7 @@
 import { fileURLToPath } from "node:url";
 
 import { ChannelType, Client, Events, GatewayIntentBits, PermissionsBitField } from "discord.js";
-import type { Guild, VoiceBasedChannel } from "discord.js";
+import type { Guild, VoiceBasedChannel, VoiceState } from "discord.js";
 import {
   VoiceConnectionStatus,
   entersState,
@@ -71,6 +71,27 @@ const client = new Client({
 let listener: Listener | undefined;
 let coach: Coach | undefined;
 
+/**
+ * Discord emits voice-state events reliably, while `channel.members` is only a
+ * convenience cache and can briefly be empty after a gateway reconnect. Keep
+ * the state events as our source of truth so a transient cache miss never
+ * makes Corin leave a channel that still has people in it.
+ */
+const humanVoiceChannels = new Map<string, Map<string, string>>();
+
+function rememberVoiceState(state: VoiceState): void {
+  if (state.id === client.user?.id) return;
+  const inGuild = humanVoiceChannels.get(state.guild.id) ?? new Map<string, string>();
+  if (state.channelId) inGuild.set(state.id, state.channelId);
+  else inGuild.delete(state.id);
+  if (inGuild.size === 0) humanVoiceChannels.delete(state.guild.id);
+  else humanVoiceChannels.set(state.guild.id, inGuild);
+}
+
+function captureVoiceStates(guild: Guild): void {
+  for (const state of guild.voiceStates.cache.values()) rememberVoiceState(state);
+}
+
 /** The channel with the most humans in it, or nothing if the server is empty. */
 /**
  * Where the coach is allowed to go is a Discord permission, not a setting in
@@ -95,10 +116,14 @@ function mayEnter(channel: VoiceBasedChannel, guild: Guild): boolean {
 function busiestChannel(guild: Guild): VoiceBasedChannel | undefined {
   let best: VoiceBasedChannel | undefined;
   let bestCount = 0;
-  for (const channel of guild.channels.cache.values()) {
-    if (channel.type !== ChannelType.GuildVoice) continue;
+  const counts = new Map<string, number>();
+  for (const channelId of humanVoiceChannels.get(guild.id)?.values() ?? []) {
+    counts.set(channelId, (counts.get(channelId) ?? 0) + 1);
+  }
+  for (const [channelId, humans] of counts) {
+    const channel = guild.channels.cache.get(channelId);
+    if (!channel || channel.type !== ChannelType.GuildVoice) continue;
     if (!mayEnter(channel, guild)) continue;
-    const humans = channel.members.filter((member) => !member.user.bot).size;
     if (humans > bestCount) {
       best = channel;
       bestCount = humans;
@@ -233,6 +258,7 @@ client.once(Events.ClientReady, async (ready) => {
     console.error(`[gateway] not a member of guild ${config.discordGuildId}. Run "npm run check".`);
     return;
   }
+  captureVoiceStates(guild);
   await reconsider(guild);
   console.log("[voice] waiting for someone to join a voice channel");
 });
@@ -244,6 +270,7 @@ client.on(Events.ShardError, (error) => console.error("[gateway] shard error:", 
 
 client.on(Events.VoiceStateUpdate, (before, after) => {
   const guild = after.guild ?? before.guild;
+  rememberVoiceState(after);
   void reconsider(guild).catch((error: unknown) => {
     console.error("[voice] could not settle on a channel:", error instanceof Error ? error.message : error);
   });

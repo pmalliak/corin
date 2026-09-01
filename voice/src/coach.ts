@@ -120,6 +120,7 @@ export type CoachOptions = {
 };
 
 type Asking = { userId: string; speaker: string };
+type ResponseTiming = { speaker: string; requestedAt: number; turnStartedAt: number; firstAudio: boolean };
 
 export function createCoach(options: CoachOptions): Coach {
   const player = createAudioPlayer();
@@ -134,6 +135,8 @@ export function createCoach(options: CoachOptions): Coach {
   let lastAnswered: { speaker: string; at: number } | undefined;
   /** Whose question the current response belongs to. */
   let asking: Asking | undefined;
+  /** Lets the live logs separate transcription, state lookup and model delay. */
+  let responseTiming: ResponseTiming | undefined;
   const meter = createMeter();
 
   const send = (event: unknown): void => {
@@ -145,6 +148,13 @@ export function createCoach(options: CoachOptions): Coach {
     speaking.stream.end();
     speaking = undefined;
     player.stop(true);
+  };
+
+  const requestResponse = (asker: Asking, turnStartedAt = performance.now()): void => {
+    asking = asker;
+    responseTiming = { speaker: asker.speaker, requestedAt: performance.now(), turnStartedAt, firstAudio: false };
+    console.log(`[latency] ${asker.speaker}: response requested after ${Math.round(performance.now() - turnStartedAt)}ms`);
+    send({ type: "response.create" });
   };
 
   /**
@@ -191,6 +201,7 @@ export function createCoach(options: CoachOptions): Coach {
     const read = options.readGameState;
     if (!read) return;
 
+    const startedAt = performance.now();
     let state: Record<string, unknown>;
     try {
       state = await read(asker.userId);
@@ -212,6 +223,7 @@ export function createCoach(options: CoachOptions): Coach {
     if (previousStateItemId) send({ type: "conversation.item.delete", item_id: previousStateItemId });
     previousStateItemId = id;
     console.log("[game] " + asker.speaker + ": " + JSON.stringify(state).slice(0, 170));
+    console.log(`[latency] ${asker.speaker}: game state in ${Math.round(performance.now() - startedAt)}ms`);
   };
 
 
@@ -243,7 +255,10 @@ export function createCoach(options: CoachOptions): Coach {
   const listenContinuously = (): void => {
     if (!conversation) return;
     // The model says when the sentence ended. Whether it gets answered is ours.
-    send({ type: "session.update", session: sessionConfig({ type: "semantic_vad", create_response: false }) });
+    send({
+      type: "session.update",
+      session: sessionConfig({ type: "semantic_vad", eagerness: "high", create_response: false }),
+    });
   };
 
   const endConversation = (reason: string): void => {
@@ -298,6 +313,8 @@ export function createCoach(options: CoachOptions): Coach {
    * neither does this private follow-up line. Everyone else remains on the
    * gated path below.
    */
+  let lineSpeechStartedAt: number | undefined;
+
   const heardOnTheLine = (itemId: string, transcript: string): void => {
     if (!conversation) return;
     const text = transcript.trim();
@@ -307,9 +324,11 @@ export function createCoach(options: CoachOptions): Coach {
       send({ type: "conversation.item.delete", item_id: itemId });
       return;
     }
-    asking = { userId: conversation.userId, speaker: conversation.speaker };
+    const turnStartedAt = lineSpeechStartedAt ?? performance.now();
+    console.log(`[latency] ${conversation.speaker}: live transcription in ${Math.round(performance.now() - turnStartedAt)}ms`);
+    lineSpeechStartedAt = undefined;
     holdConversationOpen();
-    send({ type: "response.create" });
+    requestResponse({ userId: conversation.userId, speaker: conversation.speaker }, turnStartedAt);
   };
 
   const beginSpeaking = (): PassThrough => {
@@ -325,6 +344,13 @@ export function createCoach(options: CoachOptions): Coach {
         console.log("[coach] session ready");
         break;
       case "response.output_audio.delta": {
+        if (responseTiming && !responseTiming.firstAudio) {
+          responseTiming.firstAudio = true;
+          const now = performance.now();
+          console.log(
+            `[latency] ${responseTiming.speaker}: first audio ${Math.round(now - responseTiming.requestedAt)}ms after request, ${Math.round(now - responseTiming.turnStartedAt)}ms total`,
+          );
+        }
         const chunk = Buffer.from(String(event.delta ?? ""), "base64");
         const target = speaking?.stream ?? beginSpeaking();
         const converted = toDiscordAudio(chunk, speaking?.carry ?? 0);
@@ -336,6 +362,10 @@ export function createCoach(options: CoachOptions): Coach {
         console.log(`[coach] said: ${String(event.transcript ?? "").trim()}`);
         break;
       case "response.done":
+        if (responseTiming) {
+          console.log(`[latency] ${responseTiming.speaker}: response complete in ${Math.round(performance.now() - responseTiming.requestedAt)}ms`);
+          responseTiming = undefined;
+        }
         console.log(`[cost] ${meter.answered((event.response as { usage?: Parameters<typeof meter.answered>[0] })?.usage ?? {})}`);
         if (asking !== undefined) {
           lastAnswered = { speaker: asking.speaker, at: Date.now() };
@@ -346,7 +376,10 @@ export function createCoach(options: CoachOptions): Coach {
         speaking = undefined;
         break;
       case "input_audio_buffer.speech_started":
-        if (conversation) console.log("[flow] hears speech");
+        if (conversation) {
+          lineSpeechStartedAt = performance.now();
+          console.log("[flow] hears speech");
+        }
         break;
       case "input_audio_buffer.speech_stopped":
         if (conversation) console.log("[flow] turn ended");
@@ -405,6 +438,7 @@ export function createCoach(options: CoachOptions): Coach {
     // coach has already left the channel. Answering into a closed session is
     // noise in the log and, if it ever succeeded, a voice in an empty room.
     if (closed) return;
+    const turnStartedAt = performance.now();
     const audio = toModelAudio(utterance.pcm);
     let heard;
     try {
@@ -413,6 +447,7 @@ export function createCoach(options: CoachOptions): Coach {
       console.error("[coach] could not hear:", describe(error));
       return;
     }
+    console.log(`[latency] ${utterance.speaker}: wake transcription in ${Math.round(performance.now() - turnStartedAt)}ms`);
 
     const followUp = isFollowUp(
       lastAnswered,
@@ -465,8 +500,7 @@ export function createCoach(options: CoachOptions): Coach {
         content: [{ type: "input_audio", audio: audio.toString("base64"), transcript: heard.text }],
       },
     });
-    asking = { userId: utterance.userId, speaker: utterance.speaker };
-    send({ type: "response.create" });
+    requestResponse({ userId: utterance.userId, speaker: utterance.speaker }, turnStartedAt);
   };
 
   return {
