@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { defaultTranscribePrompt, isAddressed, isPromptEcho, loudness, normalise, withinOneEdit } from "./wake.ts";
+import { createRelevance, defaultTranscribePrompt, isAddressed, isPromptEcho, loudness, normalise, withinOneEdit } from "./wake.ts";
 
 const WORDS = ["corin", "κοριν", "coach", "κοουτς"].map(normalise);
 
@@ -77,4 +77,14 @@ test("loudness separates speech from a silent room", () => {
   assert.equal(loudness(silence), 0);
   assert.ok(loudness(speech) > 0.1);
   assert.equal(loudness(Buffer.alloc(0)), 0);
+});
+
+test("inside an open conversation the name is optional but substance is not", () => {
+  const relevant = createRelevance(["corin", "κοριν"], 3);
+
+  assert.ok(relevant("και τι cooldown έχει"));
+  assert.ok(relevant("Κόριν;"), "the name alone always counts, however short");
+  assert.equal(relevant("Λοιπόν,"), false);
+  assert.equal(relevant("ναι"), false);
+  assert.equal(relevant(""), false);
 });

@@ -66,6 +66,7 @@ mod tests {
             device_id: "device-1".to_owned(),
             credential: "a".repeat(64),
             session_url: session_url.to_owned(),
+            account: None,
         }
     }
 

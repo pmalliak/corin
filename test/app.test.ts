@@ -33,6 +33,20 @@ describe("Discord interactions", () => {
     expect(textOf(followUps[0]?.message)).toContain("PAIR-ME");
   });
 
+  it("remembers the Discord handle behind a pairing code", async () => {
+    const created: Array<{ id: string; username: string | null }> = [];
+    await signedRequest(command("connect"), {
+      pairingCodes: {
+        ...fakePairingCodes,
+        create: async (account) => {
+          created.push(account);
+          return { value: "PAIR-ME", expiresAt: new Date("2026-08-31T12:10:00.000Z") };
+        },
+      },
+    });
+    expect(created).toEqual([{ id: "discord-user-1", username: "Panos" }]);
+  });
+
   it("returns only the requesting user's status for /coach status", async () => {
     const { followUps } = await signedRequest(command("status"));
     const fields = followUps[0]?.message.embeds?.[0]?.fields ?? [];
@@ -108,7 +122,8 @@ describe("Discord interactions", () => {
       ...fakeDependencies(),
       pairingCodes: {
         ...fakePairingCodes,
-        redeem: async (code, deviceName) => code === "A1B2C3D4E5F6" && deviceName === "Panos PC" ? { deviceId: "device-1", credential: "a".repeat(64) } : null,
+        redeem: async (code, deviceName) =>
+          code === "A1B2C3D4E5F6" && deviceName === "Panos PC" ? { deviceId: "device-1", credential: "a".repeat(64), discordUsername: "Panos" } : null,
       },
     });
     const response = await app.fetch(new Request("https://coach.example/agent/pair", {
@@ -117,7 +132,29 @@ describe("Discord interactions", () => {
       body: JSON.stringify({ code: "A1B2C3D4E5F6", deviceName: "Panos PC" }),
     }));
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ version: 1, deviceId: "device-1", credential: "a".repeat(64), sessionUrl: "https://coach.example/agent/session" });
+    await expect(response.json()).resolves.toMatchObject({
+      version: 1,
+      deviceId: "device-1",
+      credential: "a".repeat(64),
+      sessionUrl: "https://coach.example/agent/session",
+      account: { username: "Panos" },
+    });
+  });
+
+  it("pairs without an account when the backend never learned a handle", async () => {
+    const app = createApp(testEnv(), testContext(), {
+      ...fakeDependencies(),
+      pairingCodes: {
+        ...fakePairingCodes,
+        redeem: async () => ({ deviceId: "device-1", credential: "a".repeat(64), discordUsername: null }),
+      },
+    });
+    const response = await app.fetch(new Request("https://coach.example/agent/pair", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code: "A1B2C3D4E5F6", deviceName: "Panos PC" }),
+    }));
+    await expect(response.json()).resolves.not.toHaveProperty("account");
   });
 
   it("serves the agent binary as a named download", async () => {
@@ -151,7 +188,7 @@ function command(subcommand: string, channelId = "111111111111111111") {
     token: "interaction-token-1",
     channel_id: channelId,
     data: { name: "coach", options: [{ name: subcommand }] },
-    member: { user: { id: "discord-user-1" } },
+    member: { user: { id: "discord-user-1", username: "panos", global_name: "Panos" } },
   };
 }
 

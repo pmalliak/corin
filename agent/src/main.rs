@@ -9,6 +9,8 @@ mod live_client;
 mod pairing;
 mod provider;
 mod session;
+#[cfg(windows)]
+mod tray;
 
 use std::io::{IsTerminal, Write};
 use std::sync::Arc;
@@ -88,7 +90,13 @@ async fn pair(client: &reqwest::Client, config: &Config, store: &dyn CredentialS
     // the backend is not the one we think we are talking to.
     pairing::session_url_for(config, &response)?;
     store.save(&response.credential)?;
-    println!("Paired as \"{}\". This machine will reconnect on its own from now on.", config.device_name);
+    match response.account {
+        Some(account) => println!(
+            "Paired as \"{}\" for Discord account {}. This machine will reconnect on its own from now on.",
+            config.device_name, account.username
+        ),
+        None => println!("Paired as \"{}\". This machine will reconnect on its own from now on.", config.device_name),
+    }
     tracing::info!(device_id = %response.device_id, "paired");
     offer_autostart();
     Ok(())
@@ -140,6 +148,12 @@ fn run_autostart(action: AutostartAction) -> Result<()> {
 async fn serve(config: &Config, store: &dyn CredentialStore) -> Result<()> {
     let credential = store.load()?.context("no device credential is stored")?;
     let provider = game_data_provider().await?;
+
+    // A double-clicked agent should feel like a small desktop app, not a terminal
+    // that has accidentally been left open. The tray owns its Win32 message loop
+    // on another thread; Tokio can therefore keep doing network work here.
+    #[cfg(windows)]
+    tray::start()?;
 
     println!("Reporting status to {}. Press Ctrl+C to stop.", config.base_url);
 

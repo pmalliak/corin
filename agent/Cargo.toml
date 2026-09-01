@@ -30,8 +30,24 @@ uuid = { version = "1", features = ["v4"] }
 [target.'cfg(windows)'.dependencies]
 # Autostart is a per-user Run key, which needs no administrator rights.
 winreg = "0.52"
-# Only to drop the console window when started by that Run key.
-windows = { version = "0.57", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
+# The tray icon and its menu. muda comes with it and is what the menu is built from.
+tray-icon = { version = "0.24", default-features = false }
+# The console handling, and the small pairing window: one window class, an edit
+# box and two buttons, which is less code than pulling in a GUI framework for it.
+windows = { version = "0.57", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Console",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(windows)'.build-dependencies]
+# Puts the icons and the version block into the executable, so Explorer, the
+# taskbar and the tray all have something to show.
+winresource = "0.1"
 
 [profile.release]
 opt-level = "z"

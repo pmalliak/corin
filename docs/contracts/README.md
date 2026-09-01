@@ -1,6 +1,7 @@
 # Contracts
 
 - [`pairing-exchange-v1.schema.json`](pairing-exchange-v1.schema.json) defines the agent's one-time pairing request.
+- [`pairing-response-v1.schema.json`](pairing-response-v1.schema.json) defines what comes back: the device credential, the session URL, and optionally the Discord handle the agent puts on screen.
 - [`agent-session-v1.schema.json`](agent-session-v1.schema.json) defines authenticated `hello` and `heartbeat` messages carrying the three status flags.
 - [`agent-session-v2.schema.json`](agent-session-v2.schema.json) adds the normalized current game beside those same flags. Agents send v2; the Worker still accepts v1.
 

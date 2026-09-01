@@ -1,4 +1,4 @@
-import type { Env } from "./types";
+import type { DiscordAccount, Env } from "./types";
 
 const encoder = new TextEncoder();
 
@@ -52,8 +52,18 @@ export function interactionResponse(message: DiscordMessage): Response {
   return Response.json({ type: 4, data: { ...message, flags: 64 } });
 }
 
-export function discordUserId(interaction: { member?: { user?: { id?: string } }; user?: { id?: string } }): string | null {
-  return interaction.member?.user?.id ?? interaction.user?.id ?? null;
+type InteractionUser = { id?: string; username?: string; global_name?: string | null };
+
+/**
+ * Who ran the command. The id is what everything keys on; the handle exists so
+ * the agent can say "paired with panos" instead of showing a snowflake, and is
+ * optional because Discord is free to leave it out.
+ */
+export function discordAccount(interaction: { member?: { user?: InteractionUser }; user?: InteractionUser }): DiscordAccount | null {
+  const user = interaction.member?.user ?? interaction.user;
+  if (!user?.id) return null;
+  const handle = user.global_name?.trim() || user.username?.trim();
+  return { id: user.id, username: handle ? handle.slice(0, 64) : null };
 }
 
 export type DiscordEnv = Pick<Env, "DISCORD_PUBLIC_KEY">;

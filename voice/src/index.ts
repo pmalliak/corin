@@ -25,6 +25,7 @@ import { createEchoSink } from "./echo.ts";
 import { createCoach, type Coach } from "./coach.ts";
 import { createWakeGate, defaultTranscribePrompt } from "./wake.ts";
 import { createGameStateReader } from "./state.ts";
+import { streamFrom } from "./listener.ts";
 import { installCrashGuard } from "./resilience.ts";
 import { AlreadyRunning, claimSingleInstance } from "./lock.ts";
 
@@ -131,6 +132,9 @@ function buildSink(connection: VoiceConnection): Sink {
     voice: config.coachVoice,
     followUpMs: config.followUpMs,
     followUpMinWords: config.followUpMinWords,
+    transcribeModel: config.transcribeModel,
+    language: config.transcribeLanguage,
+    startStream: config.streaming ? (userId, onPcm) => streamFrom(connection, userId, onPcm) : undefined,
     gate: createWakeGate({
       apiKey: config.openAiApiKey,
       model: config.transcribeModel,
@@ -176,10 +180,14 @@ async function join(channel: VoiceBasedChannel): Promise<void> {
 
   watchForDrops(connection, channel.guild.id);
   const guild = channel.guild;
+  const sink = buildSink(connection);
   listener = listen(
     connection,
     (userId) => guild.members.cache.get(userId)?.displayName ?? userId,
-    buildSink(connection),
+    sink,
+    // A speaker on the live line already has one subscription; a second would
+    // fight it for the same audio.
+    (userId) => coach?.isStreaming(userId) ?? false,
   );
   console.log(`[voice] ready in "${channel.name}"`);
 }

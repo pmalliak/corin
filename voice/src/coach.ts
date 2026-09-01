@@ -32,6 +32,12 @@ const REALTIME_URL = "wss://api.openai.com/v1/realtime";
 const MODEL_SAMPLE_RATE = 24_000;
 const RECONNECT_MS = 3_000;
 
+/** Roughly a hundred milliseconds of model audio per websocket message. */
+const APPEND_BYTES = 4_800;
+
+/** How stale the match may get while a conversation is open. */
+const STATE_REFRESH_MS = 10_000;
+
 // The players speak Greek with English League terms inside it, so the coach
 // does the same. Translating "cooldown" into Greek would be correct and
 // useless: nobody in the channel says it that way.
@@ -87,7 +93,12 @@ export function isFollowUp(
   return text.split(/\s+/).filter(Boolean).length >= minWords;
 }
 
-export type Coach = { sink: Sink; close: () => void };
+export type Coach = {
+  sink: Sink;
+  /** True while this speaker is on the streaming path, so the gated one leaves them alone. */
+  isStreaming: (userId: string) => boolean;
+  close: () => void;
+};
 
 export type CoachOptions = {
   connection: VoiceConnection;
@@ -101,6 +112,11 @@ export type CoachOptions = {
   gate: Gate;
   /** Absent means the coach has no eyes on anybody's match, and says so. */
   readGameState?: GameStateReader;
+  /** Named so the open line can transcribe with the same ear as the gated path. */
+  transcribeModel: string;
+  language: string;
+  /** Opens a continuous line from one speaker. Absent keeps every turn on the gated path. */
+  startStream?: (userId: string, onPcm: (pcm: Buffer) => void) => () => void;
 };
 
 type Asking = { userId: string; speaker: string };
@@ -131,6 +147,30 @@ export function createCoach(options: CoachOptions): Coach {
     player.stop(true);
   };
 
+  /**
+   * The whole session, every time.
+   *
+   * A partial session.update is a gamble on whether the server merges or
+   * replaces, and losing that gamble costs the instructions and the voice on the
+   * first mode switch. Only turn detection ever differs between the two modes,
+   * so sending everything is both safer and shorter than reasoning about it.
+   */
+  const sessionConfig = (turnDetection: Record<string, unknown> | null): Record<string, unknown> => ({
+    type: "realtime",
+    instructions: INSTRUCTIONS,
+    output_modalities: ["audio"],
+    audio: {
+      input: {
+        format: { type: "audio/pcm", rate: MODEL_SAMPLE_RATE },
+        turn_detection: turnDetection,
+        transcription: turnDetection
+          ? { model: options.transcribeModel, ...(options.language ? { language: options.language } : {}) }
+          : null,
+      },
+      output: { format: { type: "audio/pcm", rate: MODEL_SAMPLE_RATE }, voice: options.voice },
+    },
+  });
+
   let stateItems = 0;
   let previousStateItemId: string | undefined;
 
@@ -147,13 +187,13 @@ export function createCoach(options: CoachOptions): Coach {
    * It is expensive to keep, and it is wrong: a match moves on, and a model that
    * can see two clocks may read the older one.
    */
-  const sendGameState = async (utterance: Utterance): Promise<void> => {
+  const sendGameState = async (asker: Asking): Promise<void> => {
     const read = options.readGameState;
     if (!read) return;
 
     let state: Record<string, unknown>;
     try {
-      state = await read(utterance.userId);
+      state = await read(asker.userId);
     } catch (error) {
       state = { connected: false, why: "Could not reach the backend: " + describe(error) };
     }
@@ -166,12 +206,110 @@ export function createCoach(options: CoachOptions): Coach {
         id,
         type: "message",
         role: "user",
-        content: [{ type: "input_text", text: "GAME STATE (" + utterance.speaker + "): " + JSON.stringify(state) }],
+        content: [{ type: "input_text", text: "GAME STATE (" + asker.speaker + "): " + JSON.stringify(state) }],
       },
     });
     if (previousStateItemId) send({ type: "conversation.item.delete", item_id: previousStateItemId });
     previousStateItemId = id;
-    console.log("[game] " + utterance.speaker + ": " + JSON.stringify(state).slice(0, 170));
+    console.log("[game] " + asker.speaker + ": " + JSON.stringify(state).slice(0, 170));
+  };
+
+
+  /**
+   * An open conversation with one speaker, where their audio goes up as they
+   * say it and the model decides for itself when the turn ended.
+   *
+   * The gated path waits for eight hundred milliseconds of silence, then spends
+   * a transcription round trip deciding whether to bother, and only then does
+   * the model start thinking. That is the right trade when nobody is talking to
+   * the coach and the wrong one the moment somebody is.
+   *
+   * The model detects the turn but never answers on its own: create_response is
+   * false. In a game channel most sentences are said to teammates, and a coach
+   * that replies to those is worse than a slow one.
+   */
+  type Conversation = { userId: string; speaker: string; stop: () => void; timers: NodeJS.Timeout[] };
+  let conversation: Conversation | undefined;
+  let pending = Buffer.alloc(0);
+  let appendedBytes = 0;
+
+  const flushAudio = (): void => {
+    if (pending.length === 0) return;
+    send({ type: "input_audio_buffer.append", audio: pending.toString("base64") });
+    appendedBytes += pending.length;
+    pending = Buffer.alloc(0);
+  };
+
+  const listenContinuously = (): void => {
+    if (!conversation) return;
+    // The model says when the sentence ended. Whether it gets answered is ours.
+    send({ type: "session.update", session: sessionConfig({ type: "semantic_vad", create_response: false }) });
+  };
+
+  const endConversation = (reason: string): void => {
+    if (!conversation) return;
+    const seconds = (appendedBytes / (MODEL_SAMPLE_RATE * 2)).toFixed(1);
+    console.log("[flow] closing the line with " + conversation.speaker + ": " + reason + " (sent " + seconds + "s of audio)");
+    appendedBytes = 0;
+    for (const timer of conversation.timers) clearTimeout(timer);
+    conversation.stop();
+    conversation = undefined;
+    pending = Buffer.alloc(0);
+    send({ type: "input_audio_buffer.clear" });
+    send({ type: "session.update", session: sessionConfig(null) });
+  };
+
+  const holdConversationOpen = (): void => {
+    if (!conversation) return;
+    for (const timer of conversation.timers) clearTimeout(timer);
+    conversation.timers = [
+      setTimeout(() => endConversation("nobody said anything more"), options.followUpMs),
+      setInterval(() => {
+        if (conversation) void sendGameState({ userId: conversation.userId, speaker: conversation.speaker });
+      }, STATE_REFRESH_MS) as unknown as NodeJS.Timeout,
+    ];
+  };
+
+  const beginConversation = (asker: Asking): void => {
+    const open = options.startStream;
+    if (!open || closed || socket?.readyState !== WebSocket.OPEN) return;
+    if (conversation?.userId === asker.userId) {
+      holdConversationOpen();
+      return;
+    }
+    endConversation("somebody else is talking now");
+
+    console.log(`[flow] open line with ${asker.speaker}`);
+    const stop = open(asker.userId, (pcm) => {
+      pending = Buffer.concat([pending, toModelAudio(pcm)]);
+      if (pending.length >= APPEND_BYTES) flushAudio();
+    });
+    conversation = { userId: asker.userId, speaker: asker.speaker, stop, timers: [] };
+    listenContinuously();
+    holdConversationOpen();
+  };
+
+  /** A sentence the open line just finished hearing.
+   *
+   * This line belongs to exactly one person, who has just explicitly addressed
+   * Corin. Once it is open, treating "ναι", "όχι" or "και μετά;" as ordinary
+   * room chatter makes the exchange feel like a command interface. A phone
+   * conversation does not ask for a wake word or three words between turns, so
+   * neither does this private follow-up line. Everyone else remains on the
+   * gated path below.
+   */
+  const heardOnTheLine = (itemId: string, transcript: string): void => {
+    if (!conversation) return;
+    const text = transcript.trim();
+    console.log(`[flow] ${conversation.speaker}: ${text || "(nothing)"}`);
+    if (!text) {
+      // Left in the conversation it would be paid for on every later turn.
+      send({ type: "conversation.item.delete", item_id: itemId });
+      return;
+    }
+    asking = { userId: conversation.userId, speaker: conversation.speaker };
+    holdConversationOpen();
+    send({ type: "response.create" });
   };
 
   const beginSpeaking = (): PassThrough => {
@@ -201,10 +339,23 @@ export function createCoach(options: CoachOptions): Coach {
         console.log(`[cost] ${meter.answered((event.response as { usage?: Parameters<typeof meter.answered>[0] })?.usage ?? {})}`);
         if (asking !== undefined) {
           lastAnswered = { speaker: asking.speaker, at: Date.now() };
+          beginConversation(asking);
           asking = undefined;
         }
         speaking?.stream.end();
         speaking = undefined;
+        break;
+      case "input_audio_buffer.speech_started":
+        if (conversation) console.log("[flow] hears speech");
+        break;
+      case "input_audio_buffer.speech_stopped":
+        if (conversation) console.log("[flow] turn ended");
+        break;
+      case "conversation.item.input_audio_transcription.failed":
+        console.error("[flow] could not transcribe:", JSON.stringify(event.error ?? event).slice(0, 200));
+        break;
+      case "conversation.item.input_audio_transcription.completed":
+        heardOnTheLine(String(event.item_id ?? ""), String(event.transcript ?? ""));
         break;
       case "error":
         console.error("[coach] OpenAI reported:", JSON.stringify(event.error ?? event));
@@ -224,25 +375,8 @@ export function createCoach(options: CoachOptions): Coach {
       console.log(`[coach] connected to ${options.model}`);
       lastSpeaker = undefined;
       previousStateItemId = undefined;
-      send({
-        type: "session.update",
-        session: {
-          type: "realtime",
-          instructions: INSTRUCTIONS,
-          output_modalities: ["audio"],
-          audio: {
-            input: {
-              format: { type: "audio/pcm", rate: MODEL_SAMPLE_RATE },
-              // Discord decides when a turn ended, not the model.
-              turn_detection: null,
-            },
-            output: {
-              format: { type: "audio/pcm", rate: MODEL_SAMPLE_RATE },
-              voice: options.voice,
-            },
-          },
-        },
-      });
+      // Outside a conversation Discord decides when a turn ended, not the model.
+      send({ type: "session.update", session: sessionConfig(null) });
     });
 
     socket.on("message", (data: WebSocket.RawData) => {
@@ -257,6 +391,7 @@ export function createCoach(options: CoachOptions): Coach {
 
     socket.on("close", () => {
       stopSpeaking();
+      endConversation("the connection to OpenAI dropped");
       if (closed) return;
       console.log(`[coach] disconnected, retrying in ${RECONNECT_MS / 1000}s`);
       setTimeout(connect, RECONNECT_MS).unref();
@@ -319,7 +454,7 @@ export function createCoach(options: CoachOptions): Coach {
       lastSpeaker = utterance.speaker;
     }
 
-    await sendGameState(utterance);
+    await sendGameState({ userId: utterance.userId, speaker: utterance.speaker });
     if (closed || socket?.readyState !== WebSocket.OPEN) return;
 
     send({
@@ -336,8 +471,10 @@ export function createCoach(options: CoachOptions): Coach {
 
   return {
     sink,
+    isStreaming: (userId) => conversation?.userId === userId,
     close: () => {
       closed = true;
+      endConversation("the coach is leaving");
       stopSpeaking();
       socket?.close();
     },

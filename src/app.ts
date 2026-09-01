@@ -1,7 +1,7 @@
 import {
   DiscordInteractionType,
   deferredInteractionResponse,
-  discordUserId,
+  discordAccount,
   editOriginalInteractionResponse,
   interactionResponse,
   verifyDiscordRequest,
@@ -11,7 +11,7 @@ import {
 import { failureMessage, pairingMessage, plainMessage, setupMessage, statusMessage, unknownCommandMessage } from "./messages";
 import { sha256 } from "./crypto";
 import { D1CoachRepository } from "./repositories";
-import type { DeviceAuthenticationRepository, DeviceSnapshot, DeviceStatus, DeviceStatusRepository, Env, PairingCodeRepository } from "./types";
+import type { DeviceAuthenticationRepository, DeviceSnapshot, DeviceStatus, DeviceStatusRepository, DiscordAccount, Env, PairingCodeRepository } from "./types";
 
 interface Dependencies {
   pairingCodes: PairingCodeRepository;
@@ -28,8 +28,8 @@ interface DiscordInteraction {
   application_id?: string;
   token?: string;
   data?: { name?: string; options?: Array<{ name?: string }> };
-  member?: { user?: { id?: string } };
-  user?: { id?: string };
+  member?: { user?: { id?: string; username?: string; global_name?: string | null } };
+  user?: { id?: string; username?: string; global_name?: string | null };
 }
 
 export function createApp(env: Env, ctx: Waiter, dependencies: Dependencies = defaultDependencies(env)) {
@@ -70,8 +70,8 @@ async function handleInteraction(request: Request, env: Env, ctx: Waiter, depend
 
   // Where the coach may be used is set in the guild's own integration settings,
   // so there is deliberately no channel check here.
-  const userId = discordUserId(interaction);
-  if (!userId) return interactionResponse(plainMessage("I couldn't identify your Discord account."));
+  const account = discordAccount(interaction);
+  if (!account) return interactionResponse(plainMessage("I couldn't identify your Discord account."));
 
   const subcommand = interaction.data.options?.[0]?.name;
   if (subcommand === "setup") return interactionResponse(setupMessage(agentDownloadUrl(request)));
@@ -82,7 +82,7 @@ async function handleInteraction(request: Request, env: Env, ctx: Waiter, depend
 
   // Discord abandons an interaction after three seconds, which D1 and the session
   // Durable Object can exceed together, so acknowledge first and edit the reply after.
-  ctx.waitUntil(completeCoachCommand(subcommand, userId, deferred, dependencies));
+  ctx.waitUntil(completeCoachCommand(subcommand, account, deferred, dependencies));
   return deferredInteractionResponse();
 }
 
@@ -90,10 +90,10 @@ function agentDownloadUrl(request: Request): string {
   return new URL("/download", request.url).toString();
 }
 
-async function completeCoachCommand(subcommand: "connect" | "status", userId: string, deferred: DeferredInteraction, dependencies: Dependencies): Promise<void> {
+async function completeCoachCommand(subcommand: "connect" | "status", account: DiscordAccount, deferred: DeferredInteraction, dependencies: Dependencies): Promise<void> {
   let message: DiscordMessage;
   try {
-    message = subcommand === "connect" ? await connectMessage(userId, dependencies) : await currentStatusMessage(userId, dependencies);
+    message = subcommand === "connect" ? await connectMessage(account, dependencies) : await currentStatusMessage(account.id, dependencies);
   } catch (error) {
     console.error(`/coach ${subcommand} failed`, error);
     message = failureMessage();
@@ -101,8 +101,8 @@ async function completeCoachCommand(subcommand: "connect" | "status", userId: st
   await dependencies.followUp(deferred, message);
 }
 
-async function connectMessage(userId: string, dependencies: Dependencies): Promise<DiscordMessage> {
-  return pairingMessage(await dependencies.pairingCodes.create(userId, dependencies.now()));
+async function connectMessage(account: DiscordAccount, dependencies: Dependencies): Promise<DiscordMessage> {
+  return pairingMessage(await dependencies.pairingCodes.create(account, dependencies.now()));
 }
 
 async function currentStatusMessage(userId: string, dependencies: Dependencies): Promise<DiscordMessage> {
@@ -139,7 +139,15 @@ async function handlePairingExchange(request: Request, dependencies: Dependencie
   if (!payload || !isPairingExchange(payload)) return Response.json({ version: 1, error: "invalid_request" }, { status: 400 });
   const result = await dependencies.pairingCodes.redeem(payload.code, payload.deviceName, dependencies.now());
   if (!result) return Response.json({ version: 1, error: "invalid_pairing_code" }, { status: 401 });
-  return Response.json({ version: 1, deviceId: result.deviceId, credential: result.credential, sessionUrl: new URL("/agent/session", request.url).toString() });
+  // The account is what the agent puts on screen, so a friend can see which
+  // Discord identity this PC now answers for. Absent when we never learned a handle.
+  return Response.json({
+    version: 1,
+    deviceId: result.deviceId,
+    credential: result.credential,
+    sessionUrl: new URL("/agent/session", request.url).toString(),
+    ...(result.discordUsername ? { account: { username: result.discordUsername } } : {}),
+  });
 }
 
 async function handleDeviceSession(request: Request, env: Env, dependencies: Dependencies): Promise<Response> {

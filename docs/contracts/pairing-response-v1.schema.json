@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://corin.example/contracts/pairing-response-v1.schema.json",
+  "title": "Corin pairing exchange response v1",
+  "type": "object",
+  "required": ["version", "deviceId", "credential", "sessionUrl"],
+  "properties": {
+    "version": { "const": 1 },
+    "deviceId": { "type": "string", "minLength": 1 },
+    "credential": { "type": "string", "minLength": 32 },
+    "sessionUrl": { "type": "string", "format": "uri" },
+    "account": {
+      "description": "Whose Discord account this device now answers for. Absent when the backend never learned a handle. The agent shows it and never sends it back.",
+      "type": "object",
+      "required": ["username"],
+      "properties": {
+        "username": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    }
+  }
+}

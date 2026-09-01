@@ -150,6 +150,21 @@ export type WakeGateOptions = {
   minLoudness: number;
 };
 
+/**
+ * Whether a sentence deserves an answer once a conversation is already open.
+ *
+ * The name is not required any more, since nobody says it before every
+ * sentence, but something has to be. A few words is the whole test: below that
+ * it is an interjection to the room, not a question to the coach.
+ */
+export function createRelevance(wakeWords: string[], minWords: number): (text: string) => boolean {
+  const words = wakeWords.map(normalise).filter(Boolean);
+  return (text) => {
+    if (isAddressed(text, words)) return true;
+    return text.split(/\s+/).filter(Boolean).length >= minWords;
+  };
+}
+
 export function createWakeGate(options: WakeGateOptions): Gate {
   const words = options.wakeWords.map(normalise).filter(Boolean);
 

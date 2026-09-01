@@ -4,6 +4,12 @@ export interface Env extends Cloudflare.Env {
   COACH_SERVICE_TOKEN?: string;
 }
 
+/** The Discord identity behind a pairing. The handle is what a person recognises. */
+export interface DiscordAccount {
+  id: string;
+  username: string | null;
+}
+
 export interface PairingCode {
   value: string;
   expiresAt: Date;
@@ -17,8 +23,15 @@ export interface DeviceStatus {
 }
 
 export interface PairingCodeRepository {
-  create(discordUserId: string, now: Date): Promise<PairingCode>;
-  redeem(code: string, deviceName: string, now: Date): Promise<{ deviceId: string; credential: string } | null>;
+  create(account: DiscordAccount, now: Date): Promise<PairingCode>;
+  redeem(code: string, deviceName: string, now: Date): Promise<RedeemedPairing | null>;
+}
+
+/** What the agent learns at pairing: its own credential, and whose account it now serves. */
+export interface RedeemedPairing {
+  deviceId: string;
+  credential: string;
+  discordUsername: string | null;
 }
 
 /** The connection flags plus, when a game is under way, what is happening in it. */

@@ -315,6 +315,16 @@ pub struct PairingResponse {
     pub credential: String,
     #[serde(rename = "sessionUrl")]
     pub session_url: String,
+    #[serde(default)]
+    pub account: Option<PairingAccount>,
+}
+
+/// The human-readable side of a pairing. The credential still authorizes only
+/// this device; this is simply confirmation that a downloaded agent is joining
+/// the Discord account its owner intended.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PairingAccount {
+    pub username: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -31,6 +31,8 @@ export type Config = {
   /** Seconds after an answer during which a follow up needs no wake word. */
   followUpMs: number;
   /** Words below which a follow up is thinking aloud, not a question. */
+  /** Whether an answered speaker gets a live line until the follow up window closes. */
+  streaming: boolean;
   followUpMinWords: number;
   wakeWords: string[];
   /** Lets the coach read game state from the Worker. Without it, it has no eyes. */
@@ -87,10 +89,15 @@ export function loadConfig(): Config {
     // Discord ends a turn on its own silence timer, so a cough arrives here as
     // an utterance. Anything quieter than this is never sent anywhere.
     minLoudness: Number.parseFloat(optional("COACH_MIN_LOUDNESS", "0.01")),
-    // Long enough for "και τι cooldown έχει;" right after an answer, short
-    // enough that the table's next conversation never reaches the model.
-    followUpMs: Number.parseFloat(optional("COACH_FOLLOW_UP_SECONDS", "20")) * 1000,
+    // A minute keeps a real exchange alive through a fight and a short pause.
+    // It is still tied to the one person Corin just answered, so the rest of
+    // the channel cannot accidentally become an always-on microphone.
+    followUpMs: Number.parseFloat(optional("COACH_FOLLOW_UP_SECONDS", "60")) * 1000,
     followUpMinWords: Number.parseInt(optional("COACH_FOLLOW_UP_MIN_WORDS", "3"), 10),
+    // The gated path waits for silence and then for a transcription before the
+    // model hears anything. Inside a conversation that wait is the whole
+    // difference between this and talking to a phone.
+    streaming: optional("COACH_STREAMING", "on") !== "off",
     // Both scripts, because the name is said in Greek sentences as often as
     // English ones and speech to text writes it the way it was spoken.
     wakeWords: optional("COACH_WAKE_WORDS", "corin,κοριν,coach,κοουτς")

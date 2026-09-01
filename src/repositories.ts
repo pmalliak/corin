@@ -1,18 +1,22 @@
 import { newOpaqueSecret, sha256 } from "./crypto";
-import type { DeviceAuthenticationRepository, Env, PairingCode, PairingCodeRepository } from "./types";
+import type { DeviceAuthenticationRepository, DiscordAccount, Env, PairingCode, PairingCodeRepository, RedeemedPairing } from "./types";
 
 const pairingLifetimeMs = 10 * 60 * 1_000;
 
 export class D1CoachRepository implements PairingCodeRepository, DeviceAuthenticationRepository {
   public constructor(private readonly db: Env["COACH_DB"]) {}
 
-  public async create(discordUserId: string, now: Date): Promise<PairingCode> {
+  public async create(account: DiscordAccount, now: Date): Promise<PairingCode> {
     const userId = crypto.randomUUID();
     const createdAt = now.toISOString();
 
+    // The handle is refreshed on every connect, since people rename themselves,
+    // and a missing one never overwrites a name we already know.
     await this.db
-      .prepare("INSERT INTO users (id, discord_user_id, created_at) VALUES (?, ?, ?) ON CONFLICT(discord_user_id) DO NOTHING")
-      .bind(userId, discordUserId, createdAt)
+      .prepare(
+        "INSERT INTO users (id, discord_user_id, discord_username, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(discord_user_id) DO UPDATE SET discord_username = COALESCE(excluded.discord_username, users.discord_username)",
+      )
+      .bind(userId, account.id, account.username, createdAt)
       .run();
 
     const code = newOpaqueSecret(6).toUpperCase();
@@ -23,18 +27,20 @@ export class D1CoachRepository implements PairingCodeRepository, DeviceAuthentic
       .prepare(
         "INSERT INTO pairing_codes (id, user_id, code_hash, expires_at, created_at) SELECT ?, id, ?, ?, ? FROM users WHERE discord_user_id = ?",
       )
-      .bind(codeId, await sha256(code), expiresAt.toISOString(), createdAt, discordUserId)
+      .bind(codeId, await sha256(code), expiresAt.toISOString(), createdAt, account.id)
       .run();
 
     return { value: code, expiresAt };
   }
 
-  public async redeem(code: string, deviceName: string, now: Date): Promise<{ deviceId: string; credential: string } | null> {
+  public async redeem(code: string, deviceName: string, now: Date): Promise<RedeemedPairing | null> {
     const codeHash = await sha256(code.toUpperCase());
     const matching = await this.db
-      .prepare("SELECT id, user_id FROM pairing_codes WHERE code_hash = ? AND expires_at > ? AND consumed_at IS NULL")
+      .prepare(
+        "SELECT pairing_codes.id AS id, pairing_codes.user_id AS user_id, users.discord_username AS discord_username FROM pairing_codes INNER JOIN users ON users.id = pairing_codes.user_id WHERE pairing_codes.code_hash = ? AND pairing_codes.expires_at > ? AND pairing_codes.consumed_at IS NULL",
+      )
       .bind(codeHash, now.toISOString())
-      .first<{ id: string; user_id: string }>();
+      .first<{ id: string; user_id: string; discord_username: string | null }>();
 
     if (!matching) return null;
 
@@ -51,7 +57,7 @@ export class D1CoachRepository implements PairingCodeRepository, DeviceAuthentic
       .bind(deviceId, matching.user_id, deviceName, await sha256(credential), now.toISOString())
       .run();
 
-    return { deviceId, credential };
+    return { deviceId, credential, discordUsername: matching.discord_username };
   }
 
   public async getLatestDeviceIdForDiscordUser(discordUserId: string): Promise<string | null> {

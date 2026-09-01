@@ -103,5 +103,5 @@ nothing left behind but one registry value pointing at wherever the binary sits.
 The entry passes `--background`, which hides the console window rather than
 freeing it. Freeing it would invalidate stdout, and Rust panics when a print
 fails, so the agent would die on its first line: a failure that only ever happens
-at login, where nobody is watching. The window still flashes for an instant; a
-tray build is what removes that for good.
+at login, where nobody is watching. Once paired, Corin stays in the Windows
+notification area: right-click its icon to confirm it is running or quit it.
