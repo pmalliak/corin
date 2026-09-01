@@ -1,2 +1,14 @@
 # Copy this to .dev.vars for local Worker development. Do not commit .dev.vars.
 DISCORD_PUBLIC_KEY=
+# The Discord user ID whose anonymized live-game state the local MCP tool may read.
+MCP_DISCORD_USER_ID=
+# A long random secret that the MCP client sends as Authorization: Bearer <value>.
+MCP_BEARER_TOKEN=
+# A separate long random secret, carried in the URL of /chatgpt/live-game, for a
+# ChatGPT Project that cannot send headers. URL-safe characters only, and rotated
+# on its own.
+CHATGPT_LIVE_TOKEN=
+# Mobile app secrets. Never expose OPENAI_API_KEY in the browser.
+APP_ACCESS_TOKEN=
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-5-mini

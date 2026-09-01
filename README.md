@@ -45,6 +45,38 @@ Every reply is ephemeral, so the channel stays quiet however many people are pai
 
 `POST /agent/pair` exchanges a valid pairing code for a device credential. The agent then opens `GET /agent/session` as an outbound WebSocket with `Authorization: Bearer <credential>` and sends the versioned `hello`/`heartbeat` messages defined in [`docs/contracts/`](docs/contracts/).
 
+## ChatGPT web (MCP)
+
+The Worker also serves a read-only remote MCP endpoint at `https://<worker-domain>/mcp`. It exposes one tool, `get_my_live_game`, which can read only the Discord account selected by the `MCP_DISCORD_USER_ID` Worker secret. It never accepts a user ID, device credential, or query from the MCP client. The endpoint requires `Authorization: Bearer <MCP_BEARER_TOKEN>`.
+
+Set a long random `MCP_BEARER_TOKEN` as a Worker secret and as the `MCP_BEARER_TOKEN` environment variable on the machine running Codex. In Codex's MCP server configuration, use that environment-variable name in **Bearer token env var**. Restart Codex after setting the local environment variable, then reconnect to the Worker’s `/mcp` URL.
+
+## ChatGPT Project (no MCP)
+
+A ChatGPT Project can be told to read a link before it answers, but it cannot send an `Authorization` header and it cannot speak MCP, so `/mcp` is out of reach for it. `GET /chatgpt/live-game` is the same read-only state as a plain-text page, with the secret in the URL:
+
+```
+https://<worker-domain>/chatgpt/live-game?<CHATGPT_LIVE_TOKEN>
+```
+
+`?token=<CHATGPT_LIVE_TOKEN>` works too, for typing it by hand. The page reads only the account named by `MCP_DISCORD_USER_ID`, never accepts a user ID or any other parameter from the caller, and can change nothing. It answers `text/plain` with `cache-control: no-store` and `x-robots-tag: noindex, nofollow`.
+
+```sh
+npx wrangler secret put CHATGPT_LIVE_TOKEN   # 32+ random URL-safe characters: letters, digits, - and _
+```
+
+It is a separate secret from `MCP_BEARER_TOKEN` on purpose: rotating or removing it touches nothing else, and without it configured the route returns 404, so a deployment that has not been given one cannot be probed. A secret in a URL is weaker than one in a header, because it lands in browser history, in whatever fetches the page, and in request logs. That is the deliberate trade for a client with nowhere to put a credential. Rotate it by putting a new value in the secret and updating the Project guideline.
+
+Paste this into the Project's instructions:
+
+> Before answering anything about my current League of Legends game, fetch `https://<worker-domain>/chatgpt/live-game?<CHATGPT_LIVE_TOKEN>` and base your answer only on what that page says. It is a live read-only snapshot of my own game. If it says I am not in a game, say so instead of describing a match. Never invent champions, items, scores or events that are not on the page, and re-fetch it whenever I ask about the current state, because it changes every second.
+
+## Private mobile coach
+
+`GET /mobile` serves a small phone-friendly chat app. It requires `APP_ACCESS_TOKEN`, which the player enters locally and which is checked by the Worker before a request is processed. The Worker reads the configured live game state and calls the Responses API server-side with `OPENAI_API_KEY`; this key is never sent to the browser. `OPENAI_MODEL` optionally overrides the default `gpt-5-mini`.
+
+For local development, copy `.dev.vars.example` to `.dev.vars` and set `MCP_DISCORD_USER_ID`. For the Worker, set it as a secret with `npx wrangler secret put MCP_DISCORD_USER_ID`.
+
 ## Local agent
 
 [`agent/`](agent/) is the Windows-first Rust agent that speaks that protocol. It reads League's Live Client API on `127.0.0.1:2999` and sends the whole match: the owner's champion stats, ability ranks, runes, items and score, every other player by champion with their score and build, and the recent event log.

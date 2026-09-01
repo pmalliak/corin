@@ -243,13 +243,21 @@ function testContext() {
   return { waitUntil: () => {} };
 }
 
-function testEnv(releases: Env["RELEASES"] = emptyReleases(), coachServiceToken?: string): Env {
+function testEnv(releases: Env["RELEASES"] = emptyReleases(), coachServiceToken?: string, extra: Partial<Env> = {}): Env {
   return {
     DISCORD_PUBLIC_KEY: publicKeyHex,
     COACH_DB: {} as D1Database,
     DEVICE_SESSIONS: {} as Env["DEVICE_SESSIONS"],
     RELEASES: releases,
+    ACCESS_CLIENT_ID: "test",
+    ACCESS_CLIENT_SECRET: "test",
+    ACCESS_TOKEN_URL: "https://access.example/token",
+    ACCESS_AUTHORIZATION_URL: "https://access.example/authorization",
+    ACCESS_JWKS_URL: "https://access.example/jwks",
+    COOKIE_ENCRYPTION_KEY: "test",
+    OAUTH_KV: {} as KVNamespace,
     ...(coachServiceToken ? { COACH_SERVICE_TOKEN: coachServiceToken } : {}),
+    ...extra,
   };
 }
 
@@ -346,3 +354,131 @@ describe("game state for the voice coach", () => {
     expect(response.status).toBe(400);
   });
 });
+
+describe("the live-game page a ChatGPT Project reads", () => {
+  const token = "chatgpt-url-secret";
+  const discordUserId = "86976067461472256";
+  const configured: Partial<Env> = { CHATGPT_LIVE_TOKEN: token, MCP_DISCORD_USER_ID: discordUserId };
+
+  const call = (query: string, env: Partial<Env> = configured, overrides: Partial<ReturnType<typeof fakeDependencies>> = {}) =>
+    createApp(testEnv(emptyReleases(), undefined, env), testContext(), { ...fakeDependencies(), ...overrides })
+      .fetch(new Request(`https://coach.example/chatgpt/live-game${query}`));
+
+  it("takes the secret straight out of the query string", async () => {
+    const response = await call(`?${token}`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    // A player's live position is not something a cache or a search index should keep.
+    expect(response.headers.get("cache-control")).toBe("no-store, max-age=0");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    expect(await response.text()).toContain("Agent: Connected");
+  });
+
+  it("takes the secret written as a named parameter too", async () => {
+    expect((await call(`?token=${token}`)).status).toBe(200);
+  });
+
+  it("refuses a wrong secret, one that is merely absent, and one with something appended", async () => {
+    expect((await call("?wrong")).status).toBe(401);
+    expect((await call("")).status).toBe(401);
+    // `?<secret>&anything` is not the secret with a parameter after it.
+    expect((await call(`?${token}&extra=1`)).status).toBe(401);
+  });
+
+  it("does not exist at all until a secret is configured", async () => {
+    const response = await call(`?${token}`, { MCP_DISCORD_USER_ID: discordUserId });
+    expect(response.status).toBe(404);
+  });
+
+  it("never lets the caller choose whose game it reads", async () => {
+    const asked: string[] = [];
+    const response = await call(`?token=${token}&discordUserId=999999999999999999`, configured, {
+      deviceStatus: {
+        getForDiscordUser: async (id: string) => {
+          asked.push(id);
+          return { status: { agent: "Connected" as const, league: "Running" as const, liveApi: "Available" as const, currentGame: "Active" as const }, game: null };
+        },
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(asked).toEqual([discordUserId]);
+  });
+
+  it("says plainly that there is no game, rather than leaving room to guess", async () => {
+    const text = await (await call(`?${token}`, configured, {
+      deviceStatus: {
+        getForDiscordUser: async () => ({
+          status: { agent: "Connected" as const, league: "Running" as const, liveApi: "Available" as const, currentGame: "Inactive" as const },
+          game: null,
+        }),
+      },
+    })).text();
+
+    expect(text).toContain("The player is not in a game right now");
+  });
+
+  it("writes the live game as text a coach can quote", async () => {
+    const text = await (await call(`?${token}`, configured, {
+      deviceStatus: {
+        getForDiscordUser: async () => ({
+          status: { agent: "Connected" as const, league: "Running" as const, liveApi: "Available" as const, currentGame: "Active" as const },
+          game: detailedGame(),
+        }),
+      },
+    })).text();
+
+    expect(text).toContain("Champion: Jinx, level 11, BOTTOM, ORDER side");
+    expect(text).toContain("Score: 4/1/3, CS 142 (7.5/min)");
+    expect(text).toContain("Game time: 19:02");
+    expect(text).toContain("Q5 Switcheroo!");
+    expect(text).toContain("Summoner spells: Flash, Heal");
+    expect(text).toContain("Lethal Tempo (Precision)");
+    expect(text).toContain("Runic Compass");
+    expect(text).toContain("hp 1240/1560");
+    expect(text).toContain("mana 320/620");
+    expect(text).toContain("crit 25%");
+    expect(text).toContain("- Thresh");
+    expect(text).toContain("- Ahri");
+    expect(text).toContain("14:32 ChampionKill (Ahri killed Jinx, assists: Thresh)");
+  });
+
+  it("keeps the page to champions, including the owner's own Riot ID", async () => {
+    const text = await (await call(`?${token}`, configured, {
+      deviceStatus: {
+        getForDiscordUser: async () => ({
+          status: { agent: "Connected" as const, league: "Running" as const, liveApi: "Available" as const, currentGame: "Active" as const },
+          game: detailedGame(),
+        }),
+      },
+    })).text();
+
+    // The URL carries its own secret in the open, so the one name in the snapshot stays out of the page.
+    expect(text).not.toContain("Panos#EUNE");
+  });
+});
+
+/** A game with the detail the agent actually sends: items, runes, stats and the event log. */
+function detailedGame() {
+  const game = fakeGame();
+  return {
+    ...game,
+    detail: {
+      map: "Map11",
+      events: [{ id: 3, name: "ChampionKill", timeSeconds: 872, killer: "Ahri", victim: "Jinx", assisters: ["Thresh"] }],
+    },
+    player: {
+      ...game.player,
+      riotId: "Panos#EUNE",
+      detail: {
+        wardScore: 3.2,
+        abilities: [{ slot: "Q", name: "Switcheroo!", rank: 5 }],
+        summonerSpells: ["Flash", "Heal"],
+        runes: { keystone: { displayName: "Lethal Tempo" }, primaryRuneTree: { displayName: "Precision" } },
+        items: [{ id: 3866, name: "Runic Compass", slot: 0 }],
+        stats: { currentHealth: 1240, maxHealth: 1560, resourceType: "MANA", resourceValue: 320, resourceMax: 620, attackDamage: 214, critChance: 0.25 },
+      },
+    },
+  };
+}

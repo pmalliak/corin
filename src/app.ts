@@ -9,7 +9,9 @@ import {
   type DiscordMessage,
 } from "./discord";
 import { failureMessage, pairingMessage, plainMessage, setupMessage, statusMessage, unknownCommandMessage } from "./messages";
+import { liveGameReport } from "./live-game-report";
 import { sha256 } from "./crypto";
+import { mobileAppHtml } from "./mobile-app";
 import { D1CoachRepository } from "./repositories";
 import type { DeviceAuthenticationRepository, DeviceSnapshot, DeviceStatus, DeviceStatusRepository, DiscordAccount, Env, PairingCodeRepository } from "./types";
 
@@ -37,11 +39,14 @@ export function createApp(env: Env, ctx: Waiter, dependencies: Dependencies = de
     fetch: async (request: Request): Promise<Response> => {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health") return new Response("ok");
+      if (request.method === "GET" && url.pathname === "/mobile") return new Response(mobileAppHtml, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+      if (request.method === "POST" && url.pathname === "/mobile/api/chat") return handleMobileChat(request, env, dependencies);
       if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/download") return handleAgentDownload(request, env);
       if (request.method === "POST" && url.pathname === "/interactions") return handleInteraction(request, env, ctx, dependencies);
       if (request.method === "POST" && url.pathname === "/agent/pair") return handlePairingExchange(request, dependencies);
       if (request.method === "GET" && url.pathname === "/agent/session") return handleDeviceSession(request, env, dependencies);
       if (request.method === "GET" && url.pathname === "/coach/state") return handleCoachState(request, url, env, dependencies);
+      if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/chatgpt/live-game") return handleChatgptLiveGame(request, url, env, dependencies);
       return new Response("Not Found", { status: 404 });
     },
   };
@@ -205,6 +210,98 @@ async function handleCoachState(request: Request, url: URL, env: Env, dependenci
 
   const snapshot = await dependencies.deviceStatus.getForDiscordUser(discordUserId, dependencies.now());
   return Response.json(snapshot, { headers: { "cache-control": "no-store" } });
+}
+
+/**
+ * The same live state as a plain page, for a reader that can only open a URL.
+ *
+ * A ChatGPT Project can be told to read a link before it answers, but it cannot
+ * send an Authorization header and it cannot speak MCP, so the secret has to
+ * travel in the URL. That is exactly why this is its own route with its own
+ * token: it is rotated or removed on its own, without touching the MCP endpoint
+ * or the coach service token, and even in the wrong hands it reads one account,
+ * the one named by MCP_DISCORD_USER_ID, and can change nothing.
+ *
+ * A URL-borne secret is weaker than a header: it lands in browser history, in
+ * whatever fetches the page, and in request logs. It is a deliberate trade for
+ * a client that has nowhere else to put a credential.
+ */
+async function handleChatgptLiveGame(request: Request, url: URL, env: Env, dependencies: Dependencies): Promise<Response> {
+  const expected = env.CHATGPT_LIVE_TOKEN;
+  if (!expected) return new Response("Not Found", { status: 404 });
+
+  const presented = urlSecret(url);
+  if (!presented || !(await secretsMatch(presented, expected))) return new Response("Unauthorized", { status: 401 });
+  if (request.method === "HEAD") return reportResponse("");
+
+  const discordUserId = env.MCP_DISCORD_USER_ID;
+  if (!discordUserId || !/^\d{17,20}$/.test(discordUserId)) {
+    return reportResponse("Corin is not configured yet: no Discord account has been selected on the Worker.", 503);
+  }
+
+  const snapshot = await dependencies.deviceStatus.getForDiscordUser(discordUserId, dependencies.now());
+  return reportResponse(liveGameReport(snapshot, dependencies.now()));
+}
+
+/**
+ * The secret as the guideline writes it, `?<secret>`, and as a person naturally
+ * writes it by hand, `?token=<secret>`. Anything else is not a token at all,
+ * rather than a token with something appended to it.
+ */
+function urlSecret(url: URL): string | null {
+  const named = url.searchParams.get("token");
+  if (named) return named;
+
+  const query = url.search.slice(1);
+  if (query.length === 0 || query.includes("&") || query.includes("=")) return null;
+  try {
+    return decodeURIComponent(query);
+  } catch {
+    return null;
+  }
+}
+
+/** Plain text, because the reader is a language model and never a browser. */
+function reportResponse(body: string, status = 200): Response {
+  return new Response(status === 200 && body.length === 0 ? null : body, {
+    status,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      // A player's live position is not something a cache or a search index should keep.
+      "cache-control": "no-store, max-age=0",
+      "x-robots-tag": "noindex, nofollow",
+    },
+  });
+}
+
+async function handleMobileChat(request: Request, env: Env, dependencies: Dependencies): Promise<Response> {
+  const expected = env.APP_ACCESS_TOKEN;
+  const presented = request.headers.get("x-corin-access-token");
+  if (!expected || !presented || !(await secretsMatch(presented, expected))) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+  const payload = await requestJson(request);
+  const message = typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>).message : null;
+  if (typeof message !== "string" || message.trim().length === 0 || message.length > 800) return Response.json({ error: "Ask a short question." }, { status: 400 });
+  if (!env.OPENAI_API_KEY || !env.MCP_DISCORD_USER_ID) return Response.json({ error: "The assistant is not configured yet." }, { status: 503 });
+
+  const snapshot = await dependencies.deviceStatus.getForDiscordUser(env.MCP_DISCORD_USER_ID, dependencies.now());
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: env.OPENAI_MODEL || "gpt-5-mini",
+      store: false,
+      max_output_tokens: 500,
+      instructions: "You are Corin, a concise League of Legends coach. Use only the supplied live-game state. If the player is not in a game, say so. Do not invent facts, names, or game events. Reply in the user's language.",
+      input: `Live-game state:\n${JSON.stringify(snapshot).slice(0, 30_000)}\n\nPlayer question: ${message.trim()}`,
+    }),
+  });
+  if (!response.ok) {
+    console.error("OpenAI response failed", response.status);
+    return Response.json({ error: "The AI service is unavailable right now." }, { status: 502 });
+  }
+  const result = (await response.json()) as { output_text?: string };
+  return Response.json({ answer: result.output_text || "I couldn't produce an answer." }, { headers: { "cache-control": "no-store" } });
 }
 
 /** Compares digests rather than the secrets, so the answer takes the same time either way. */

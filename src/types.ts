@@ -2,6 +2,28 @@ export interface Env extends Cloudflare.Env {
   DISCORD_PUBLIC_KEY: string;
   /** Lets the voice coach read player game state. Absent means the route does not exist. */
   COACH_SERVICE_TOKEN?: string;
+  /** The only Discord account whose live state the read-only MCP endpoint may expose. */
+  MCP_DISCORD_USER_ID?: string;
+  /** Personal secret accepted by the remote MCP endpoint as a Bearer token. */
+  MCP_BEARER_TOKEN?: string;
+  /**
+   * Personal secret carried in the URL of the read-only page a ChatGPT Project
+   * reads. Its own token, so it can be rotated alone. Absent means the route
+   * does not exist.
+   */
+  CHATGPT_LIVE_TOKEN?: string;
+  ACCESS_CLIENT_ID: string;
+  ACCESS_CLIENT_SECRET: string;
+  ACCESS_TOKEN_URL: string;
+  ACCESS_AUTHORIZATION_URL: string;
+  ACCESS_JWKS_URL: string;
+  COOKIE_ENCRYPTION_KEY: string;
+  OAUTH_KV: KVNamespace;
+  /** Personal bearer secret for the mobile web app. */
+  APP_ACCESS_TOKEN?: string;
+  /** Optional override; defaults to the inexpensive GPT-5 Mini model. */
+  OPENAI_MODEL?: string;
+  OPENAI_API_KEY?: string;
 }
 
 /** The Discord identity behind a pairing. The handle is what a person recognises. */

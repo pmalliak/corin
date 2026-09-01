@@ -19,13 +19,25 @@
     }
   ],
   "durable_objects": {
-    "bindings": [{ "name": "DEVICE_SESSIONS", "class_name": "DeviceSession" }]
+    "bindings": [
+      { "name": "DEVICE_SESSIONS", "class_name": "DeviceSession" },
+      { "name": "MCP_OBJECT", "class_name": "CorinMcp" }
+    ]
   },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "b3c7b56e1dab48669f74b1ea4ff5bd37"
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "RELEASES",
       "bucket_name": "corin-releases"
     }
   ],
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DeviceSession"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["DeviceSession"] },
+    { "tag": "v2", "new_sqlite_classes": ["CorinMcp"] }
+  ]
 }
