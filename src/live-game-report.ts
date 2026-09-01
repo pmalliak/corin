@@ -155,17 +155,30 @@ function wardScore(detail: Record<string, unknown>): string | null {
 /** Q, W, E, R and the passive with the ranks put into them so far. */
 function abilities(detail: Record<string, unknown>): string | null {
   const raw = Array.isArray(detail.abilities) ? detail.abilities : [];
-  const ranks = raw
+  const ranked = raw
     .map((entry) => record(entry))
     .map((ability) => {
       const slot = text(ability.slot, 8);
       if (!slot) return null;
       const rank = number(ability.rank);
       const name = text(ability.name, 48);
-      return `${slot}${rank !== null ? round(rank) : ""}${name ? ` ${name}` : ""}`;
+      return { slot, line: `${slot}${rank !== null ? round(rank) : ""}${name ? ` ${name}` : ""}` };
     })
-    .filter((entry): entry is string => entry !== null);
-  return ranks.length > 0 ? ranks.join(", ") : null;
+    .filter((entry): entry is { slot: string; line: string } => entry !== null)
+    .sort((left, right) => slotOrder(left.slot) - slotOrder(right.slot));
+  return ranked.length > 0 ? ranked.map((entry) => entry.line).join(", ") : null;
+}
+
+/**
+ * The agent keys abilities by slot, so they arrive alphabetical: E, Passive, Q,
+ * R, W. Q, W, E, R is the order a skill order is talked about in, and reading a
+ * skill order out of the alphabet is how a coach gets it wrong.
+ */
+const slots = ["Q", "W", "E", "R", "PASSIVE"];
+
+function slotOrder(slot: string): number {
+  const index = slots.indexOf(slot.toUpperCase());
+  return index === -1 ? slots.length : index;
 }
 
 /** Keystone first, then the trees, since that is the shape advice is given in. */
@@ -225,12 +238,17 @@ function championStats(detail: Record<string, unknown>): string | null {
     ["crit", stats.critChance],
     ["life steal", stats.lifeSteal],
     ["omnivamp", stats.omnivamp],
-    ["tenacity", stats.tenacity],
   ];
   for (const [label, value] of shares) {
     const share = number(value);
     if (share !== null && share > 0) bits.push(`${label} ${round(share * 100)}%`);
   }
+
+  // Riot sends crit and life steal as a fraction of one, and tenacity as the
+  // percentage itself. A live game showed tenacity 5, which as a fraction would
+  // have read 500%.
+  const tenacity = number(stats.tenacity);
+  if (tenacity !== null && tenacity > 0) bits.push(`tenacity ${round(tenacity)}%`);
 
   return bits.length > 0 ? bits.join(", ") : null;
 }

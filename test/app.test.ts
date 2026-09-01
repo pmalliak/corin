@@ -371,7 +371,8 @@ describe("the live-game page a ChatGPT Project reads", () => {
     expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
     // A player's live position is not something a cache or a search index should keep.
     expect(response.headers.get("cache-control")).toBe("no-store, max-age=0");
-    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    // No x-robots-tag: the fetchers this page exists for read it, and some refuse a page that carries it.
+    expect(response.headers.get("x-robots-tag")).toBeNull();
     expect(await response.text()).toContain("Agent: Connected");
   });
 
@@ -379,11 +380,16 @@ describe("the live-game page a ChatGPT Project reads", () => {
     expect((await call(`?token=${token}`)).status).toBe(200);
   });
 
-  it("refuses a wrong secret, one that is merely absent, and one with something appended", async () => {
+  it("survives a parameter appended after the secret", async () => {
+    // A fetcher adding its own parameter, or a cache-buster added by hand, must not lock the page.
+    expect((await call(`?${token}&t=17`)).status).toBe(200);
+    expect((await call(`?token=${token}&t=17`)).status).toBe(200);
+  });
+
+  it("refuses a wrong secret, and one that is merely absent", async () => {
     expect((await call("?wrong")).status).toBe(401);
     expect((await call("")).status).toBe(401);
-    // `?<secret>&anything` is not the secret with a parameter after it.
-    expect((await call(`?${token}&extra=1`)).status).toBe(401);
+    expect((await call("?other=1")).status).toBe(401);
   });
 
   it("does not exist at all until a secret is configured", async () => {
@@ -432,8 +438,11 @@ describe("the live-game page a ChatGPT Project reads", () => {
     expect(text).toContain("Champion: Jinx, level 11, BOTTOM, ORDER side");
     expect(text).toContain("Score: 4/1/3, CS 142 (7.5/min)");
     expect(text).toContain("Game time: 19:02");
-    expect(text).toContain("Q5 Switcheroo!");
+    // The agent keys abilities by slot, so they arrive alphabetical. A skill order is read Q, W, E, R.
+    expect(text).toContain("Abilities: Q5 Switcheroo!, W3 Zap!, R1 Super Mega Death Rocket!, Passive0 Get Excited!");
     expect(text).toContain("Summoner spells: Flash, Heal");
+    // Riot reports tenacity as the percentage itself, unlike crit and life steal.
+    expect(text).toContain("tenacity 5%");
     expect(text).toContain("Lethal Tempo (Precision)");
     expect(text).toContain("Runic Compass");
     expect(text).toContain("hp 1240/1560");
@@ -473,11 +482,16 @@ function detailedGame() {
       riotId: "Panos#EUNE",
       detail: {
         wardScore: 3.2,
-        abilities: [{ slot: "Q", name: "Switcheroo!", rank: 5 }],
+        abilities: [
+          { slot: "R", name: "Super Mega Death Rocket!", rank: 1 },
+          { slot: "Passive", name: "Get Excited!", rank: 0 },
+          { slot: "Q", name: "Switcheroo!", rank: 5 },
+          { slot: "W", name: "Zap!", rank: 3 },
+        ],
         summonerSpells: ["Flash", "Heal"],
         runes: { keystone: { displayName: "Lethal Tempo" }, primaryRuneTree: { displayName: "Precision" } },
         items: [{ id: 3866, name: "Runic Compass", slot: 0 }],
-        stats: { currentHealth: 1240, maxHealth: 1560, resourceType: "MANA", resourceValue: 320, resourceMax: 620, attackDamage: 214, critChance: 0.25 },
+        stats: { currentHealth: 1240, maxHealth: 1560, resourceType: "MANA", resourceValue: 320, resourceMax: 620, attackDamage: 214, critChance: 0.25, tenacity: 5 },
       },
     },
   };

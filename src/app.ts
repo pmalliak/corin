@@ -39,6 +39,7 @@ export function createApp(env: Env, ctx: Waiter, dependencies: Dependencies = de
     fetch: async (request: Request): Promise<Response> => {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/health") return new Response("ok");
+      if (request.method === "GET" && url.pathname === "/robots.txt") return robotsResponse();
       if (request.method === "GET" && url.pathname === "/mobile") return new Response(mobileAppHtml, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
       if (request.method === "POST" && url.pathname === "/mobile/api/chat") return handleMobileChat(request, env, dependencies);
       if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/download") return handleAgentDownload(request, env);
@@ -213,6 +214,18 @@ async function handleCoachState(request: Request, url: URL, env: Env, dependenci
 }
 
 /**
+ * Explicitly permissive, and served because the fetchers this Worker exists to
+ * be read by look for one. A 404 is only usually taken as permission, and none
+ * of these routes is reachable without a secret, so a crawler that asks has
+ * nothing here to find.
+ */
+function robotsResponse(): Response {
+  return new Response("User-agent: *\nAllow: /\n", {
+    headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=3600" },
+  });
+}
+
+/**
  * The same live state as a plain page, for a reader that can only open a URL.
  *
  * A ChatGPT Project can be told to read a link before it answers, but it cannot
@@ -245,31 +258,39 @@ async function handleChatgptLiveGame(request: Request, url: URL, env: Env, depen
 
 /**
  * The secret as the guideline writes it, `?<secret>`, and as a person naturally
- * writes it by hand, `?token=<secret>`. Anything else is not a token at all,
- * rather than a token with something appended to it.
+ * writes it by hand, `?token=<secret>`.
+ *
+ * Only the first parameter is read, and a bare one at that. A fetcher that
+ * appends a parameter of its own, or a cache-buster added by hand, must not turn
+ * the secret into a miss.
  */
 function urlSecret(url: URL): string | null {
   const named = url.searchParams.get("token");
   if (named) return named;
 
-  const query = url.search.slice(1);
-  if (query.length === 0 || query.includes("&") || query.includes("=")) return null;
+  const first = url.search.slice(1).split("&")[0] ?? "";
+  if (first.length === 0 || first.includes("=")) return null;
   try {
-    return decodeURIComponent(query);
+    return decodeURIComponent(first);
   } catch {
     return null;
   }
 }
 
-/** Plain text, because the reader is a language model and never a browser. */
+/**
+ * Plain text, because the reader is a language model and never a browser.
+ *
+ * Deliberately no `x-robots-tag`. A URL nobody can reach without the secret is
+ * not something a crawler can index anyway, and the header is read by the very
+ * fetchers this page exists for, which can refuse a page that carries it.
+ */
 function reportResponse(body: string, status = 200): Response {
   return new Response(status === 200 && body.length === 0 ? null : body, {
     status,
     headers: {
       "content-type": "text/plain; charset=utf-8",
-      // A player's live position is not something a cache or a search index should keep.
+      // A player's live position is not something a cache should keep.
       "cache-control": "no-store, max-age=0",
-      "x-robots-tag": "noindex, nofollow",
     },
   });
 }
