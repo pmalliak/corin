@@ -73,3 +73,76 @@ describe("agent session contract", () => {
     expect(parseAgentMessage({ version: 3, type: "heartbeat", requestId: "request-1", payload: { ...flags } })).toBeNull();
   });
 });
+
+describe("what the coach needs beyond the status flags", () => {
+  const base = {
+    version: 2 as const,
+    type: "heartbeat" as const,
+    requestId: "r1",
+    payload: { league: "Running", liveApi: "Available", currentGame: "Active" },
+  };
+
+  const participant = (extra: Record<string, unknown> = {}) => ({
+    champion: "Darius",
+    team: "CHAOS",
+    level: 9,
+    kills: 3,
+    deaths: 2,
+    assists: 1,
+    creepScore: 88,
+    isDead: false,
+    ...extra,
+  });
+
+  it("keeps the player's items and runes, which is what a build question is about", () => {
+    const message = parseAgentMessage({
+      ...base,
+      payload: {
+        ...base.payload,
+        game: {
+          matchKey: "abc",
+          mode: "CLASSIC",
+          timeSeconds: 1142,
+          player: participant({ champion: "Lissandra", team: "ORDER", gold: 2140, items: [{ name: "Zhonya's Hourglass" }], runes: { keystone: "Electrocute" } }),
+          participants: [participant()],
+        },
+      },
+    });
+
+    expect(message?.game?.player.detail).toEqual({
+      items: [{ name: "Zhonya's Hourglass" }],
+      runes: { keystone: "Electrocute" },
+    });
+  });
+
+  it("keeps what the other players have built, without keeping who they are", () => {
+    const message = parseAgentMessage({
+      ...base,
+      payload: {
+        ...base.payload,
+        game: {
+          matchKey: "abc",
+          mode: "CLASSIC",
+          timeSeconds: 60,
+          player: participant({ gold: 500 }),
+          participants: [participant({ items: [{ name: "Doran's Blade" }] })],
+        },
+      },
+    });
+
+    expect(message?.game?.participants[0]?.detail).toEqual({ items: [{ name: "Doran's Blade" }] });
+    expect(JSON.stringify(message)).not.toContain("riotId");
+  });
+
+  it("says nothing about detail when the agent sent nothing extra", () => {
+    const message = parseAgentMessage({
+      ...base,
+      payload: {
+        ...base.payload,
+        game: { matchKey: "abc", mode: "CLASSIC", timeSeconds: 60, player: participant({ gold: 0 }), participants: [] },
+      },
+    });
+
+    expect(message?.game?.player.detail).toBeUndefined();
+  });
+});

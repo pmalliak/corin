@@ -24,6 +24,7 @@ import { listen, type Listener, type Sink } from "./listener.ts";
 import { createEchoSink } from "./echo.ts";
 import { createCoach, type Coach } from "./coach.ts";
 import { createWakeGate, defaultTranscribePrompt } from "./wake.ts";
+import { createGameStateReader } from "./state.ts";
 import { installCrashGuard } from "./resilience.ts";
 import { AlreadyRunning, claimSingleInstance } from "./lock.ts";
 
@@ -114,7 +115,16 @@ function buildSink(connection: VoiceConnection): Sink {
     `[voice] coach sink: ${config.coachModel}, voice "${config.coachVoice}", ` +
       `answering to ${config.wakeWords.join(", ")}`,
   );
+  // Both halves are needed: where the Worker is, and permission to ask it. With
+  // either missing the coach still talks, it just cannot see anybody's game.
+  const eyes =
+    config.workerUrl && config.serviceToken
+      ? createGameStateReader(config.workerUrl, config.serviceToken)
+      : undefined;
+  if (!eyes) console.warn("[voice] no game link: set CORIN_WORKER_URL and COACH_SERVICE_TOKEN to give the coach eyes");
+
   coach = createCoach({
+    readGameState: eyes,
     connection,
     apiKey: config.openAiApiKey,
     model: config.coachModel,

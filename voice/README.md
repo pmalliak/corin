@@ -107,3 +107,26 @@ is exposed, since every connection this process makes is outbound.
 
 `.env` is excluded from the image by `.dockerignore` and injected at run time by
 `compose.yaml`, so no key is ever baked into a layer.
+
+## The game link
+
+The coach can see the asker's match. When a question is about what is happening
+right now, the model calls one tool and answers from what comes back:
+
+```
+Κόριν, τι έχω χτίσει μέχρι τώρα;
+  → Runic Compass, Malignance και Sorcerer's Shoes.
+```
+
+The chain is: the agent reports the match to the Worker over its existing
+WebSocket, the Worker keeps it in the device's Durable Object, and this process
+reads it over HTTPS at `GET /coach/state` with `COACH_SERVICE_TOKEN`. That token
+is not a device credential, because the coach speaks for every paired player at
+once and no single device should be able to do that. Without the token
+configured the route does not exist, so a deployment that has not been given one
+cannot be probed for anybody's game.
+
+Discord identifies the speaker, so the coach reads the match belonging to the
+person who asked and nobody else. The 17 KB heartbeat is trimmed to under 1.5 KB
+before it reaches the model: names of items rather than their prices and slots,
+ability ranks as "Q5", allies and enemies split by the asker's own side.

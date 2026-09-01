@@ -206,12 +206,13 @@ function testContext() {
   return { waitUntil: () => {} };
 }
 
-function testEnv(releases: Env["RELEASES"] = emptyReleases()): Env {
+function testEnv(releases: Env["RELEASES"] = emptyReleases(), coachServiceToken?: string): Env {
   return {
     DISCORD_PUBLIC_KEY: publicKeyHex,
     COACH_DB: {} as D1Database,
     DEVICE_SESSIONS: {} as Env["DEVICE_SESSIONS"],
     RELEASES: releases,
+    ...(coachServiceToken ? { COACH_SERVICE_TOKEN: coachServiceToken } : {}),
   };
 }
 
@@ -267,3 +268,44 @@ export function fakeGame() {
 const fakeDeviceAuthentication: DeviceAuthenticationRepository = {
   authenticate: async () => null,
 };
+
+describe("game state for the voice coach", () => {
+  const token = "service-token-for-the-coach";
+  const url = "https://coach.example/coach/state?discordUserId=86976067461472256";
+
+  // Written out rather than defaulted, because passing undefined to a default
+  // parameter selects the default, which quietly made the "no token" case pass.
+  const call = (init: RequestInit = {}, configured: string | undefined = token) =>
+    createApp(testEnv(emptyReleases(), configured), testContext(), fakeDependencies()).fetch(new Request(url, init));
+
+  it("hands the snapshot to a caller holding the service token", async () => {
+    const response = await call({ headers: { authorization: `Bearer ${token}` } });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      status: { agent: "Connected", league: "Running", liveApi: "Available", currentGame: "Active" },
+      game: null,
+    });
+    // A player's live position is not something a cache should keep.
+    expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("refuses a wrong token, and one that is merely absent", async () => {
+    expect((await call({ headers: { authorization: "Bearer wrong" } })).status).toBe(401);
+    expect((await call()).status).toBe(401);
+  });
+
+  it("does not exist at all until a token is configured", async () => {
+    // A deployment without the secret cannot be probed for anybody's game.
+    const response = await createApp(testEnv(emptyReleases()), testContext(), fakeDependencies())
+      .fetch(new Request(url, { headers: { authorization: `Bearer ${token}` } }));
+    expect(response.status).toBe(404);
+  });
+
+  it("wants a Discord user id that could actually be one", async () => {
+    const response = await createApp(testEnv(emptyReleases(), token), testContext(), fakeDependencies())
+      .fetch(new Request("https://coach.example/coach/state?discordUserId=../../etc", { headers: { authorization: `Bearer ${token}` } }));
+
+    expect(response.status).toBe(400);
+  });
+});

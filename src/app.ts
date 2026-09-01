@@ -9,6 +9,7 @@ import {
   type DiscordMessage,
 } from "./discord";
 import { failureMessage, pairingMessage, plainMessage, setupMessage, statusMessage, unknownCommandMessage } from "./messages";
+import { sha256 } from "./crypto";
 import { D1CoachRepository } from "./repositories";
 import type { DeviceAuthenticationRepository, DeviceSnapshot, DeviceStatus, DeviceStatusRepository, Env, PairingCodeRepository } from "./types";
 
@@ -40,6 +41,7 @@ export function createApp(env: Env, ctx: Waiter, dependencies: Dependencies = de
       if (request.method === "POST" && url.pathname === "/interactions") return handleInteraction(request, env, ctx, dependencies);
       if (request.method === "POST" && url.pathname === "/agent/pair") return handlePairingExchange(request, dependencies);
       if (request.method === "GET" && url.pathname === "/agent/session") return handleDeviceSession(request, env, dependencies);
+      if (request.method === "GET" && url.pathname === "/coach/state") return handleCoachState(request, url, env, dependencies);
       return new Response("Not Found", { status: 404 });
     },
   };
@@ -171,6 +173,38 @@ class DurableDeviceStatusRepository implements DeviceStatusRepository {
   }
 }
 
+/**
+ * The voice coach asking what a player's game looks like right now.
+ *
+ * Discord voice needs UDP and a Worker has none, so the coach runs as its own
+ * process elsewhere and reads game state over HTTPS instead of sharing memory
+ * with the session. It presents a service token rather than a device
+ * credential, because it is not a device: it speaks for every paired player at
+ * once, and no single device credential should carry that.
+ *
+ * Without the token configured the route does not exist at all, so a
+ * deployment that has not been given one cannot be probed for player state.
+ */
+async function handleCoachState(request: Request, url: URL, env: Env, dependencies: Dependencies): Promise<Response> {
+  const expected = env.COACH_SERVICE_TOKEN;
+  if (!expected) return new Response("Not Found", { status: 404 });
+
+  const presented = bearerValue(request.headers.get("authorization"));
+  if (!presented || !(await secretsMatch(presented, expected))) return new Response("Unauthorized", { status: 401 });
+
+  const discordUserId = url.searchParams.get("discordUserId");
+  if (!discordUserId || !/^\d{17,20}$/.test(discordUserId)) return new Response("Bad Request", { status: 400 });
+
+  const snapshot = await dependencies.deviceStatus.getForDiscordUser(discordUserId, dependencies.now());
+  return Response.json(snapshot, { headers: { "cache-control": "no-store" } });
+}
+
+/** Compares digests rather than the secrets, so the answer takes the same time either way. */
+async function secretsMatch(presented: string, expected: string): Promise<boolean> {
+  const [a, b] = await Promise.all([sha256(presented), sha256(expected)]);
+  return a === b;
+}
+
 async function requestJson(request: Request): Promise<unknown | null> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return null;
   const contentLength = request.headers.get("content-length");
@@ -205,6 +239,16 @@ function isPairingExchange(value: unknown): value is { code: string; deviceName:
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
   return typeof record.code === "string" && /^[A-Za-z0-9]{12}$/.test(record.code) && typeof record.deviceName === "string" && record.deviceName.length > 0 && record.deviceName.length <= 80;
+}
+
+/**
+ * Any bearer token, for the service token, whose strength is the operator's
+ * business. `bearerCredential` stays strict because a device credential has a
+ * shape this Worker itself chose.
+ */
+function bearerValue(header: string | null): string | null {
+  const match = /^Bearer (\S+)$/i.exec(header ?? "");
+  return match?.[1] ?? null;
 }
 
 function bearerCredential(header: string | null): string | null {

@@ -8,7 +8,10 @@ export type AgentStatusPayload = {
 
 export type Team = "ORDER" | "CHAOS";
 
-export type AgentPlayer = {
+/** Whatever the agent sent that is not modelled above: items, runes, stats, abilities. */
+type WithDetail = { detail?: Record<string, unknown> };
+
+export type AgentPlayer = WithDetail & {
   champion: string;
   team: Team;
   level: number;
@@ -22,7 +25,7 @@ export type AgentPlayer = {
   riotId?: string;
 };
 
-export type AgentParticipant = {
+export type AgentParticipant = WithDetail & {
   champion: string;
   team: Team;
   level: number;
@@ -116,6 +119,7 @@ function parsePlayer(value: unknown): AgentPlayer | null {
   const base = parseParticipant(value);
   if (!base || !isRecord(value) || !isCount(value.gold)) return null;
   return {
+    // `base` already carries the unmodelled fields as detail.
     ...base,
     gold: value.gold,
     ...(isShortString(value.riotId, 128) ? { riotId: value.riotId } : {}),
@@ -139,7 +143,25 @@ function parseParticipant(value: unknown): AgentParticipant | null {
     creepScore: value.creepScore,
     isDead: value.isDead,
     ...(isShortString(value.position, 16) ? { position: value.position } : {}),
+    ...detailOf(value, PARTICIPANT_KEYS),
   };
+}
+
+const PARTICIPANT_KEYS = [
+  "champion", "team", "level", "kills", "deaths", "assists", "creepScore", "isDead", "position", "gold", "riotId",
+] as const;
+
+/**
+ * Keeps the fields nobody here models: items, runes, ability ranks, the full
+ * stat block. The coach needs to answer "what have I built", and re-declaring
+ * every League stat in this file would only guarantee it drifts from the agent.
+ */
+function detailOf(value: Record<string, unknown>, modelled: readonly string[]): WithDetail {
+  const detail: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!modelled.includes(key)) detail[key] = entry;
+  }
+  return Object.keys(detail).length > 0 ? { detail } : {};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

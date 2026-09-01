@@ -1,5 +1,7 @@
 export interface Env extends Cloudflare.Env {
   DISCORD_PUBLIC_KEY: string;
+  /** Lets the voice coach read player game state. Absent means the route does not exist. */
+  COACH_SERVICE_TOKEN?: string;
 }
 
 export interface PairingCode {

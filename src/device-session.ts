@@ -1,8 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
-import { parseAgentMessage, type AgentGame, type AgentStatusPayload } from "./agent-contract";
+import { parseAgentMessage } from "./agent-contract";
+import { carryGameThroughBlink, heartbeatTtlMs, type StoredSnapshot } from "./game-continuity";
 import type { DeviceSnapshot, DeviceStatus, Env } from "./types";
-
-const heartbeatTtlMs = 75_000;
 
 /**
  * A v2 heartbeat carries the whole match: ten players with items and runes, the
@@ -11,11 +10,6 @@ const heartbeatTtlMs = 75_000;
  * enough for a long game, still far short of anything worth worrying about.
  */
 const maxMessageBytes = 64 * 1024;
-
-type StoredSnapshot = AgentStatusPayload & {
-  lastHeartbeatAt: number;
-  game?: AgentGame | null;
-};
 
 const disconnected: DeviceStatus = { agent: "Disconnected", league: "Unknown", liveApi: "Unknown", currentGame: "Unknown" };
 
@@ -57,7 +51,13 @@ export class DeviceSession extends DurableObject<Env> {
     const agentMessage = parseAgentMessage(raw);
     if (!agentMessage) return this.closeInvalid(socket);
 
-    const snapshot: StoredSnapshot = { ...agentMessage.payload, game: agentMessage.game, lastHeartbeatAt: Date.now() };
+    const now = Date.now();
+    const previous = await this.ctx.storage.get<StoredSnapshot>("status");
+    const snapshot: StoredSnapshot = {
+      ...agentMessage.payload,
+      ...carryGameThroughBlink(agentMessage.game, previous, agentMessage.payload, now),
+      lastHeartbeatAt: now,
+    };
     await this.ctx.storage.put("status", snapshot);
     socket.send(JSON.stringify({ version: 1, type: "ack", requestId: agentMessage.requestId, payload: { receivedAt: snapshot.lastHeartbeatAt } }));
   }

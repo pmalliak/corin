@@ -33,6 +33,8 @@ export type Config = {
   /** Words below which a follow up is thinking aloud, not a question. */
   followUpMinWords: number;
   wakeWords: string[];
+  /** Lets the coach read game state from the Worker. Without it, it has no eyes. */
+  serviceToken: string;
   workerUrl: string;
 };
 
@@ -95,6 +97,7 @@ export function loadConfig(): Config {
       .split(",")
       .map((word) => word.trim())
       .filter(Boolean),
+    serviceToken: process.env.COACH_SERVICE_TOKEN?.trim() ?? "",
     workerUrl: process.env.CORIN_WORKER_URL?.trim() ?? "",
   };
 }

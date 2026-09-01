@@ -26,31 +26,32 @@ import { toDiscordAudio, toModelAudio } from "./audio.ts";
 import type { Sink, Utterance } from "./listener.ts";
 import type { Gate } from "./wake.ts";
 import { createMeter } from "./meter.ts";
+import type { GameStateReader } from "./state.ts";
 
 const REALTIME_URL = "wss://api.openai.com/v1/realtime";
 const MODEL_SAMPLE_RATE = 24_000;
 const RECONNECT_MS = 3_000;
 
-// The players speak Greek with English League terms inside it, so the coach
-// does the same. Translating "cooldown" into Greek would be correct and
-// useless: nobody in the channel says it that way.
+const GAME_STATE_TOOL = {
+  type: "function",
+  name: "get_game_state",
+  description:
+    "The current League game of whichever player is speaking: their champion, level, KDA, CS, gold, items and ability ranks, " +
+    "plus every ally and enemy by champion with their score and build, and the game clock. " +
+    "Call this for any question about what is happening in their match right now. Never guess these numbers.",
+  parameters: { type: "object", properties: {}, additionalProperties: false },
+} as const;
+
 // The players speak Greek with English League terms inside it, so the coach
 // does the same. Translating "cooldown" into Greek would be correct and
 // useless: nobody in the channel says it that way.
 //
-// The bans are here because the first live answer earned every one of them: it
-// opened with a filler word, ran to five sentences, and closed by offering to
-// look at the match together. In a teamfight that is not help, it is noise.
-// The players speak Greek with English League terms inside it, so the coach
-// does the same. Translating "cooldown" into Greek would be correct and
-// useless: nobody in the channel says it that way.
-//
-// Every rule below was earned by a real answer. The bans on openers and
-// closers came from a reply that began "Έτσι," and ended by offering to review
-// the match together. The one sentence limit came from three sentence answers
-// that were still too long to hear mid fight. The narrow scope of the "no live
-// data" rule came from the coach refusing to say what cooldown Lux's ultimate
-// has, which is a fact about the game and not about anybody's match.
+// Every rule below was earned by a real answer. The bans on openers and closers
+// came from a reply that began with a filler word and ended by offering to
+// review the match together. The one sentence limit came from three sentence
+// answers that were still too long to hear mid fight. And the coach once
+// refused to say what cooldown an ultimate has, because an earlier version of
+// these instructions told it, far too broadly, that it could not see the game.
 export const INSTRUCTIONS = [
   "Είσαι ο Κόριν, προπονητής League of Legends που μιλάει σε φωνητικό κανάλι Discord με μια παρέα φίλων, την ώρα που παίζουν.",
   "Απαντάς πάντα στα ελληνικά. Τους όρους του παιχνιδιού τους κρατάς στα αγγλικά, όπως τους λένε οι παίκτες:",
@@ -63,16 +64,19 @@ export const INSTRUCTIONS = [
   "Αν δεν ξέρεις, πες σκέτο ότι δεν το ξέρεις. Μία φράση, χωρίς επιφυλάξεις γύρω της.",
   "Πριν από τη φωνή κάθε παίκτη σου λέγεται ποιος μιλάει.",
   "Ξέρεις κανονικά το παιχνίδι και απαντάς ελεύθερα για champions, abilities, cooldowns, items, runes, objectives και matchups.",
-  "Αυτό που ΔΕΝ βλέπεις είναι το match που παίζεται τώρα. Μόνο αν σε ρωτήσουν για τη δική τους τρέχουσα κατάσταση,",
-  "δηλαδή πόσο CS έχουν αυτή τη στιγμή, τι έχουν χτίσει, πόσα kills, πόση ώρα παίζει το game, τι έχει ο αντίπαλός τους τώρα,",
-  "πες σε μία πρόταση ότι η σύνδεση με το παιχνίδι δεν είναι ακόμα έτοιμη. Ποτέ μην εφεύρεις νούμερο για το τρέχον match.",
+  "Για το match που παίζεται ΤΩΡΑ έχεις το εργαλείο get_game_state, που σου δίνει την κατάσταση αυτού που μιλάει:",
+  "champion, level, KDA, CS, gold, items, ability ranks, τον χρόνο του game και τους υπόλοιπους παίκτες ανά champion.",
+  "Κάλεσέ το για κάθε ερώτηση που αφορά το τωρινό τους παιχνίδι, και απάντα από αυτό που γυρίζει.",
+  "Το εργαλείο το καλείς ΣΙΩΠΗΛΑ. Μη λες τίποτα πριν ή ενώ το καλείς: ούτε Μισό, ούτε Τσεκάρω, ούτε Ένα δευτερόλεπτο.",
+  "Ο παίκτης πρέπει να ακούσει μόνο μία φορά τη φωνή σου, και αυτή να είναι η απάντηση.",
+  "Ποτέ μην εφεύρεις νούμερο για το τρέχον match. Αν το εργαλείο πει ότι δεν είναι συνδεδεμένος, πες τον λόγο σε μία πρόταση.",
 ].join(" ");
 
 /**
  * True when this utterance is a follow up to an answer the coach just gave.
  *
- * From a real session: "Κόριν, τι κάνει το ulti της Lux;", an answer, then
- * "Τι cooldown έχει;" into silence, because the name was missing. Nobody says a
+ * From a real session: a question about an ultimate, an answer, then "Τι
+ * cooldown έχει;" into silence, because the name was missing. Nobody says a
  * person's name before every sentence of a conversation, and having to do so
  * makes the coach feel like a vending machine.
  *
@@ -107,7 +111,11 @@ export type CoachOptions = {
   /** A follow up shorter than this many words is somebody thinking aloud. */
   followUpMinWords: number;
   gate: Gate;
+  /** Absent means the coach has no eyes on anybody's match, and says so. */
+  readGameState?: GameStateReader;
 };
+
+type Asking = { userId: string; speaker: string };
 
 export function createCoach(options: CoachOptions): Coach {
   const player = createAudioPlayer();
@@ -120,7 +128,8 @@ export function createCoach(options: CoachOptions): Coach {
   let speaking: { stream: PassThrough; carry: number } | undefined;
   /** Who the coach last answered, and when it stopped speaking to them. */
   let lastAnswered: { speaker: string; at: number } | undefined;
-  let awaiting: string | undefined;
+  /** Whose question the current response belongs to. */
+  let asking: Asking | undefined;
   const meter = createMeter();
 
   const send = (event: unknown): void => {
@@ -141,6 +150,36 @@ export function createCoach(options: CoachOptions): Coach {
     return stream;
   };
 
+  /**
+   * Answers the model's tool call with the asker's own game, then asks for the
+   * spoken reply. The asker is captured before the fetch, because the response
+   * that carried the call ends while the fetch is still in flight.
+   */
+  const serveGameState = async (callId: string, asker: Asking | undefined): Promise<void> => {
+    let output: Record<string, unknown>;
+    if (!options.readGameState) {
+      output = { connected: false, why: "This deployment has no link to the game backend." };
+    } else if (!asker) {
+      output = { connected: false, why: "It is not clear which player is asking." };
+    } else {
+      try {
+        output = await options.readGameState(asker.userId);
+      } catch (error) {
+        output = { connected: false, why: `Could not reach the backend: ${describe(error)}` };
+      }
+    }
+
+    console.log(`[game] ${asker?.speaker ?? "someone"}: ${JSON.stringify(output).slice(0, 220)}`);
+    if (closed || socket?.readyState !== WebSocket.OPEN) return;
+
+    send({
+      type: "conversation.item.create",
+      item: { type: "function_call_output", call_id: callId, output: JSON.stringify(output) },
+    });
+    asking = asker;
+    send({ type: "response.create" });
+  };
+
   const handle = (event: { type?: string; [key: string]: unknown }): void => {
     switch (event.type) {
       case "session.updated":
@@ -157,11 +196,14 @@ export function createCoach(options: CoachOptions): Coach {
       case "response.output_audio_transcript.done":
         console.log(`[coach] said: ${String(event.transcript ?? "").trim()}`);
         break;
+      case "response.function_call_arguments.done":
+        if (event.name === GAME_STATE_TOOL.name) void serveGameState(String(event.call_id), asking);
+        break;
       case "response.done":
         console.log(`[cost] ${meter.answered((event.response as { usage?: Parameters<typeof meter.answered>[0] })?.usage ?? {})}`);
-        if (awaiting !== undefined) {
-          lastAnswered = { speaker: awaiting, at: Date.now() };
-          awaiting = undefined;
+        if (asking !== undefined) {
+          lastAnswered = { speaker: asking.speaker, at: Date.now() };
+          asking = undefined;
         }
         speaking?.stream.end();
         speaking = undefined;
@@ -200,6 +242,7 @@ export function createCoach(options: CoachOptions): Coach {
               voice: options.voice,
             },
           },
+          ...(options.readGameState ? { tools: [GAME_STATE_TOOL], tool_choice: "auto" } : {}),
         },
       });
     });
@@ -234,7 +277,7 @@ export function createCoach(options: CoachOptions): Coach {
     try {
       heard = await options.gate(utterance, audio);
     } catch (error) {
-      console.error("[coach] could not hear:", error instanceof Error ? error.message : error);
+      console.error("[coach] could not hear:", describe(error));
       return;
     }
 
@@ -286,7 +329,7 @@ export function createCoach(options: CoachOptions): Coach {
         content: [{ type: "input_audio", audio: audio.toString("base64"), transcript: heard.text }],
       },
     });
-    awaiting = utterance.speaker;
+    asking = { userId: utterance.userId, speaker: utterance.speaker };
     send({ type: "response.create" });
   };
 
@@ -298,4 +341,8 @@ export function createCoach(options: CoachOptions): Coach {
       socket?.close();
     },
   };
+}
+
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
